@@ -38,10 +38,19 @@ If the user sends a text message with no image, reply with:
 
 ### Phase 2: Run Generation
 
-3. Run the browser-use generation script:
+3. Determine the repo root path. The skill directory is located at
+   `<REPO_ROOT>/skills/higgsfield-generate/`. The repo root is two levels up
+   from this SKILL.md file. Run the browser-use generation script:
    ```bash
-   cd "/mnt/c/Users/Jamaal/Documents/Phantom Systems Inc/HiggsfieldAgent"
-   .venv/bin/python scripts/generate_fufu.py "IMAGE_PATH" --chrome-profile "Default"
+   REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+   "$REPO_ROOT/.venv/bin/python" "$REPO_ROOT/scripts/generate_fufu.py" "IMAGE_PATH" --chrome-profile "Default"
+   ```
+   
+   Alternatively, if the repo is at a known path, use it directly:
+   ```bash
+   /mnt/c/Users/Mallika/Documents/HiggsfieldAgent/.venv/bin/python \
+     /mnt/c/Users/Mallika/Documents/HiggsfieldAgent/scripts/generate_fufu.py \
+     "IMAGE_PATH" --chrome-profile "Default"
    ```
 
    The script outputs JSON to stdout:
