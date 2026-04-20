@@ -1,19 +1,25 @@
-# Merge this into ~/.hermes/config.yaml with:
-#   yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' \
-#     ~/.hermes/config.yaml config/hermes-config-snippet.yaml \
-#     > /tmp/hermes-merged.yaml && mv /tmp/hermes-merged.yaml ~/.hermes/config.yaml
-#
-# Or manually copy the block below into your existing config.yaml.
+# Merge this into ~/.hermes/profiles/higgsfield/config.yaml
+# Or manually copy the relevant blocks into your existing config.
 
 skills:
   external_dirs:
-    - ${HOME}/HiggsfieldAgent/skills
+    - /mnt/c/Users/Mallika/Documents/HiggsfieldAgent/skills
 
   config:
     higgsfield-generate:
-      browser_profile: higgsfield
+      chrome_profile: Default
 
-# Enable persistent browser sessions (cookies survive restarts)
-browser:
-  camofox:
-    managed_persistence: true
+platforms:
+  telegram:
+    extra:
+      dm_topics:
+      - chat_id: 5938713749
+        topics:
+        - name: FUFU Generator
+          icon_color: 9367192
+          skill: higgsfield-generate
+      - chat_id: 1004169493
+        topics:
+        - name: FUFU Generator
+          icon_color: 9367192
+          skill: higgsfield-generate
