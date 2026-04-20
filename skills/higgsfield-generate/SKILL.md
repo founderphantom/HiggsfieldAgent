@@ -36,7 +36,7 @@ If the user sends a text message with no image, reply with:
 
 2. Determine the image aspect ratio by running:
    ```
-   python scripts/get_aspect_ratio.py <image_path>
+   python "/mnt/c/Users/Jamaal/Documents/Phantom Systems Inc/HiggsfieldAgent/scripts/get_aspect_ratio.py" <image_path>
    ```
    The script prints one of: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `9:16`, `16:9`.
    Save the output as `ASPECT_RATIO`.
@@ -65,11 +65,23 @@ If the user sends a text message with no image, reply with:
    ```
    browser_snapshot()
    ```
+   The character selector has category tabs: **All**, **Soul**, **Soul 2.0**,
+   **Soul Cinema**. Click the **"Soul 2.0"** tab to show Soul 2.0 characters
+   where FUFU is located. Then take another snapshot:
+   ```
+   browser_snapshot()
+   ```
+   Scroll through the character grid if needed to find **"FUFU"** (exact name,
+   all caps). It may not be visible without scrolling. Use `browser_scroll` if
+   the character grid is long.
 
-7. Click the **"FUFU"** Soul Character:
+7. Click the **"FUFU"** Soul Character (exact label: "FUFU", under the "Soul 2.0" category):
    ```
    browser_click(ref="<ref for FUFU>")
    ```
+   If FUFU is not visible in the snapshot, scroll down in the character
+   grid and take another snapshot until you find it. Do NOT use search — browse
+   the "Soul 2.0" category instead.
 
 8. Take a snapshot to find the image upload element:
    ```
