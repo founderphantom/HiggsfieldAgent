@@ -262,6 +262,51 @@ If the user sends a text message with no image, reply with:
 
 ## Pitfalls
 
+- **Cookie consent dialog blocks interactions**: The cookie consent dialog
+  appears on page load with "Accept all" / "Reject all" / "Customize" buttons.
+  **You MUST click "Accept all" before clicking any tabs or controls.** If you
+  try to click the "Image Reference" tab while the cookie dialog is visible, the
+  click silently fails — the tab won't switch. Always dismiss the cookie dialog
+  first, then take a snapshot and proceed.
+
+- **Character grid takes 8+ seconds to load**: When opening the character
+  selection dialog (by clicking "No Character Choose" / "No Character"), the
+  character grid area is initially blank/dark. The dialog shows filter tabs
+  (All, Soul, Soul 2.0, Soul Cinema) immediately, but the character cards
+  below take 5-10 seconds to render. **Wait at least 8 seconds** after opening
+  the dialog before taking a snapshot. Use `browser_snapshot()` after the wait
+  — if still blank, wait another 5 seconds and retry. FUFU appears under the
+  "Soul 2.0" category.
+
+- **FUFU label is "Fufu" (mixed case)**: The character button label is
+  "Fufu", not "FUFU". When searching by text or verifying selection, match
+  the exact case shown on the page.
+
+- **File upload area has NO accessibility ref**: After selecting FUFU and
+  switching to Image Reference tab, the dark dashed upload area ("Choose
+  images to upload") does NOT get an accessibility tree ref ID. Clicking the
+  "Choose" button on the FUFU card opens the character dialog again, NOT a
+  file picker. The upload icon in the dashed area is visible via `browser_vision`
+  but not addressable via `browser_click`. 
+  **Workaround**: If the upload area has no clickable ref, the only viable
+  path is to use the "Text to image" tab with FUFU selected and describe the
+  reference image conceptually, OR try clicking on the "Create Image" button
+  [e1] at the top — it sometimes opens a broader creation dialog with upload
+  support. As a last resort, try the "Text to image" tab and generate via
+  prompt description.
+
+- **Browser sessions frequently disconnect**: During long wait periods (8 min),
+  the browser session may disconnect. If `browser_navigate` or `browser_click`
+  fails with "No browser session" or "Navigation failed: 500", call
+  `browser_navigate` again to re-establish. The session cookies persist in the
+  browser profile, so re-navigating typically restores the authenticated session.
+  Always verify the page state after reconnecting before proceeding.
+
+- **Generate button works without reference image**: The Generate button doesn't
+  enforce image upload as a requirement — it will proceed and generate images,
+  but they won't be variations of the reference image. Always verify the upload
+  area shows a preview before clicking Generate.
+
 - **Session expired / Login blocking**: If navigating to the Soul v2 page
   redirects to a login screen at step 4, the browser profile cookies have expired.
   Navigate to `https://higgsfield.ai` to verify: clicking the "Login" link opens
@@ -289,13 +334,14 @@ If the user sends a text message with no image, reply with:
   a pre-authenticated browser profile (not a clean session). Without valid cookies
   already in the browser profile, generation cannot proceed. Send a message to
   Telegram and stop.
-- **File upload**: The file chooser interaction depends on the browser profile
-  having the correct permissions. If the upload fails, try using `browser_vision`
-  to see what the upload area looks like and adjust the interaction accordingly.
 - **Clipboard vs. visible link**: Hermes browser tools use accessibility trees,
   not the system clipboard. "Copy link" puts the URL in the clipboard, but we
   need to read it from visible page elements (toast, dialog, URL field). If
-  nothing is visible, try `browser_console()` to check if the URL was logged.
+  nothing is visible, try extracting the URL from the page using the annotated
+  Vision [N] number mapping. Note that `browser_console()` does NOT work with
+  the Camofox backend — "JavaScript evaluation is not supported" — so you cannot
+  evaluate JS expressions to read clipboard, DOM state, or console output.
+  Only use `browser_snapshot` and `browser_vision` to inspect page state.
 - **Rate limits**: Higgsfield may throttle generation requests. If the Generate
   button produces an error about rate limits or credits, report to the user.
 - **3-dot menu positioning**: The 3-dot menu is in the top-right corner of each
