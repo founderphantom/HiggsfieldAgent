@@ -250,9 +250,33 @@ If the user sends a text message with no image, reply with:
 
 ## Pitfalls
 
-- **Session expired**: If the page shows a login screen at step 4, the browser
-  profile cookies have expired. The user must manually log in again. Send a
-  message and stop — do not attempt to log in programmatically.
+- **Session expired / Login blocking**: If navigating to the Soul v2 page
+  redirects to a login screen at step 4, the browser profile cookies have expired.
+  Navigate to `https://higgsfield.ai` to verify: clicking the "Login" link opens
+  a modal dialog (not a page redirect).
+
+  **Login button requires two clicks**: On the homepage, the first click on
+  "Login" redirects to `/ai/video` instead of opening a login modal. A second
+  click on "Login" from that page opens the OAuth modal (Google/Apple/Microsoft
+  buttons). If the Login button doesn't seem to work on the first attempt,
+  click it again. The Google/Apple/Microsoft OAuth buttons
+  do NOT work in the headless browser session — the browser cannot open OAuth
+  popups or redirect flows. Additionally, repeated login attempts trigger
+  the "Too many requests. Please try again in a bit." rate limit due to bot
+  detection (the browser runs without residential proxies).
+
+  **Cookie injection is not possible**: (a) JavaScript `document.cookie` is
+  blocked for both read and write (`SecurityError`) on the higgsfield.ai domain,
+  and (b) the browser tools don't expose Playwright's native cookie API. The
+  `__session` JWT has a ~60-second expiry and requires Clerk's refresh mechanism.
+  Session-bound cookies (`__cf_bm`, `datadome`, `clerk_active_context`) are tied
+  to the specific browser instance and cannot be transferred.
+
+  If the session is expired and login is blocked, ask the user to log in manually
+  on their own browser first, and the browser session must have been started with
+  a pre-authenticated browser profile (not a clean session). Without valid cookies
+  already in the browser profile, generation cannot proceed. Send a message to
+  Telegram and stop.
 - **File upload**: The file chooser interaction depends on the browser profile
   having the correct permissions. If the upload fails, try using `browser_vision`
   to see what the upload area looks like and adjust the interaction accordingly.

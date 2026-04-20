@@ -11,7 +11,7 @@ skills:
 
   config:
     higgsfield-generate:
-      browser_profile: ${HIGGSFIELD_BROWSER_PROFILE_PATH}
+      browser_profile: higgsfield
 
 # Enable persistent browser sessions (cookies survive restarts)
 browser:
