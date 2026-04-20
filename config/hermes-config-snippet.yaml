@@ -1,0 +1,19 @@
+# Merge this into ~/.hermes/config.yaml with:
+#   yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' \
+#     ~/.hermes/config.yaml config/hermes-config-snippet.yaml \
+#     > /tmp/hermes-merged.yaml && mv /tmp/hermes-merged.yaml ~/.hermes/config.yaml
+#
+# Or manually copy the block below into your existing config.yaml.
+
+skills:
+  external_dirs:
+    - ${HOME}/HiggsfieldAgent/skills
+
+  config:
+    higgsfield-generate:
+      browser_profile: ${HIGGSFIELD_BROWSER_PROFILE_PATH}
+
+# Enable persistent browser sessions (cookies survive restarts)
+browser:
+  camofox:
+    managed_persistence: true
