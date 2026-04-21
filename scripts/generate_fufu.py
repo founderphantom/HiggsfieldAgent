@@ -9,7 +9,7 @@ Output (stdout JSON):
     {"status": "error", "message": "..."}
 
 Requires env vars:
-    OPENROUTER_API_KEY  — for the LLM driving browser-use
+    GOOGLE_API_KEY  — for Gemini LLM driving browser-use
 """
 import argparse
 import asyncio
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from browser_use import Agent, Browser, ChatOpenAI
+from browser_use import Agent, Browser, ChatGoogle
 from get_aspect_ratio import closest_ratio
 
 from PIL import Image
@@ -38,27 +38,41 @@ def build_task(image_path: str, aspect_ratio: str) -> str:
 
 1. Navigate to https://higgsfield.ai/mobile/image/soul-v2
 
-2. If a cookie consent dialog appears (with "Accept all" / "Reject all" buttons), click "Accept all" first.
+2. BLANK PAGE CHECK: After the page loads, check if the UI is blank/empty (no tabs,
+   no controls, just a blank or dark screen with no interactive elements). Higgsfield
+   sometimes loads with a blank UI. If the page appears blank:
+   - Refresh the page (navigate to the same URL again)
+   - Wait for it to load
+   - If still blank after 2 refreshes, respond with EXACTLY:
+     FAILED: Page loaded blank after multiple refreshes
 
-3. If the page shows a login screen instead of the generation interface, respond with EXACTLY:
+3. If a cookie consent dialog appears (with "Accept all" / "Reject all" buttons), click "Accept all" first.
+
+4. If the page shows a login screen instead of the generation interface, respond with EXACTLY:
    FAILED: Session expired - login required
 
-4. Click the "Image Reference" tab at the top of the page.
+5. Click the "Image Reference" tab at the top of the page.
 
-5. Find and click the character selector (it may say "No Character" or show a character name).
-   When the character dialog opens, wait 8 seconds for the grid to load, then click the "Soul 2.0" category tab.
-   Find and click "Fufu" in the character grid. If not visible, scroll down within the grid to find it.
+6. Find and click the character selector (it may say "No Character" or show a character name).
+   When the character dialog opens:
+   - Wait 15 seconds for the character grid to load (it is slow)
+   - If the grid area is blank/empty (no character cards visible), wait another 10 seconds
+   - If STILL blank after 25 seconds total, close the dialog, refresh the page
+     (navigate to the URL again), dismiss any cookie dialog, click Image Reference tab,
+     and try opening the character selector again
+   - Once characters are visible, click the "Soul 2.0" category tab
+   - Find and click "Fufu" in the character grid. If not visible, scroll down to find it.
 
-6. Upload the image file at: {image_path}
+7. Upload the image file at: {image_path}
    Click the upload area or find the file input element and upload this file.
 
-7. Select the aspect ratio "{aspect_ratio}" from the aspect ratio options.
+8. Select the aspect ratio "{aspect_ratio}" from the aspect ratio options.
 
-8. Set Batch Size to "4" (click the 4 option).
+9. Set Batch Size to "4" (click the 4 option).
 
-9. Set Quality to "2K" (click the 2K option).
+10. Set Quality to "2K" (click the 2K option).
 
-10. VERIFICATION CHECK - Before clicking Generate, verify ALL of these:
+11. VERIFICATION CHECK - Before clicking Generate, verify ALL of these:
     - Image Reference tab is active/selected
     - Fufu character is selected
     - An image preview is visible in the upload area (not empty)
@@ -69,28 +83,31 @@ def build_task(image_path: str, aspect_ratio: str) -> str:
     If ANY check fails, respond with EXACTLY:
     FAILED: Pre-check failed - [which check failed]
 
-11. Click the "Generate" button.
+12. Click the "Generate" button.
 
-12. If generation fails to start (error message appears), respond with EXACTLY:
+13. If generation fails to start (error message appears), respond with EXACTLY:
     FAILED: Generation error - [error message]
 
-13. After clicking Generate, wait 8 minutes for the images to process.
+14. After clicking Generate, wait 8 minutes for the images to process.
 
-14. Navigate to https://higgsfield.ai/asset/image
+15. Navigate to https://higgsfield.ai/asset/image
 
-15. Check if the top 4 images in the grid are fully loaded (no spinners/progress bars).
+16. BLANK PAGE CHECK (again): If the assets page loads blank, refresh it. Same rule
+    as step 2 — retry up to 2 times.
+
+17. Check if the top 4 images in the grid are fully loaded (no spinners/progress bars).
     If not ready, wait 7 more minutes, then navigate to the assets page again and check.
     If still not ready after 15 minutes total, respond with EXACTLY:
     FAILED: Generation timed out after 15 minutes
 
-16. For each of the 4 newest images in the grid, extract the share link:
+18. For each of the 4 newest images in the grid, extract the share link:
     - Click the 3-dot menu (top-right corner of the image card)
     - Click "Share" in the dropdown
     - Click "Copy link"
     - Note the URL shown in the toast notification or dialog
     - Press Escape to close the menu
 
-17. After collecting all 4 links, respond with EXACTLY this format (one URL per line):
+19. After collecting all 4 links, respond with EXACTLY this format (one URL per line):
     LINKS:
     [url1]
     [url2]
@@ -126,17 +143,30 @@ async def run_generation(image_path: str, chrome_profile: str | None = None) -> 
     aspect_ratio = get_aspect_ratio_for_image(image_path)
     task = build_task(image_path, aspect_ratio)
 
-    # Configure LLM via OpenRouter
-    llm = ChatOpenAI(
-        model="qwen/qwen3-235b-a22b",
-        base_url="https://openrouter.ai/api/v1",
-    )
+    # Configure LLM via Google Gemini (requires GOOGLE_API_KEY env var)
+    llm = ChatGoogle(model="gemini-3.1-flash-lite-preview")
 
     # Configure browser — use system Chrome with persistent profile
+    # Anti-bot-detection args prevent Higgsfield from silently blocking
+    # the character grid API when it detects automation
+    anti_detect_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=AutomationControlled",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+
     if chrome_profile:
-        browser = Browser.from_system_chrome(profile_directory=chrome_profile)
+        browser = Browser.from_system_chrome(
+            profile_directory=chrome_profile,
+            headless=False,
+            args=anti_detect_args,
+        )
     else:
-        browser = Browser.from_system_chrome()
+        browser = Browser.from_system_chrome(
+            headless=False,
+            args=anti_detect_args,
+        )
 
     agent = Agent(
         task=task,

@@ -98,7 +98,7 @@ The generation script requires:
   pip install -r requirements.txt
   ```
 
-- **OPENROUTER_API_KEY** environment variable (set in `.env` at repo root)
+- **GOOGLE_API_KEY** environment variable (set in `.env` at repo root)
 
 - **Google Chrome** installed with a profile that is logged into Higgsfield.
   The script uses your system Chrome with persistent cookies — log into
@@ -109,6 +109,11 @@ The generation script requires:
   already using that profile).
 
 ## Pitfalls
+
+- **Blank page on load**: Higgsfield sometimes loads with a completely blank
+  UI (no tabs, no controls). The script handles this by refreshing up to 2
+  times automatically. If it still fails, the error message will say
+  "Page loaded blank after multiple refreshes" — just retry the generation.
 
 - **Chrome must be closed**: browser-use cannot connect to a Chrome profile
   that is already in use. Close all Chrome windows before generation starts.
