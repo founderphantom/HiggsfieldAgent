@@ -43,7 +43,7 @@ If the user sends a text message with no image, reply with:
    from this SKILL.md file. Run the browser-use generation script:
    ```bash
    REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-   "$REPO_ROOT/.venv/bin/python" "$REPO_ROOT/scripts/generate_fufu.py" "IMAGE_PATH" --chrome-profile "Default"
+   "$REPO_ROOT/.venv/bin/python" "$REPO_ROOT/scripts/generate_fufu.py" "IMAGE_PATH" --cdp-url http://localhost:9222
    ```
    
    Alternatively, if the repo is at a known path, use it directly:
@@ -100,13 +100,17 @@ The generation script requires:
 
 - **GOOGLE_API_KEY** environment variable (set in `.env` at repo root)
 
-- **Google Chrome** installed with a profile that is logged into Higgsfield.
-  The script uses your system Chrome with persistent cookies — log into
-  Higgsfield once in Chrome and the session persists across runs.
+- **Google Chrome** installed (deb package, not snap) at `/usr/bin/google-chrome`.
+  A dedicated profile at `~/.higgsfield-chrome` must exist and be logged into
+  Higgsfield. The script auto-starts Chrome if it is not already running and
+  reuses it across Telegram calls — Chrome stays alive between messages.
 
-- **Chrome must be fully closed** before running the script (browser-use
-  launches Chrome with the specified profile, which conflicts if Chrome is
-  already using that profile).
+  One-time login setup:
+  ```bash
+  mkdir -p ~/.higgsfield-chrome
+  google-chrome --user-data-dir="$HOME/.higgsfield-chrome" --no-first-run https://higgsfield.ai
+  # Sign in with Google, confirm logged into Higgsfield, close Chrome cleanly
+  ```
 
 ## Pitfalls
 
@@ -115,11 +119,20 @@ The generation script requires:
   times automatically. If it still fails, the error message will say
   "Page loaded blank after multiple refreshes" — just retry the generation.
 
-- **Chrome must be closed**: browser-use cannot connect to a Chrome profile
-  that is already in use. Close all Chrome windows before generation starts.
 
-- **Session expired**: If Higgsfield login has expired, the script returns
-  an error. Log in manually to Chrome, visit higgsfield.ai, then try again.
+- **Session expired**: If Higgsfield login has expired, re-login manually:
+  ```bash
+  google-chrome --user-data-dir="$HOME/.higgsfield-chrome" --no-first-run https://higgsfield.ai
+  ```
+  Sign in with Google, confirm you're on Higgsfield's logged-in page, close Chrome, then retry.
+
+- **Chrome not starting**: If the script raises "Chrome did not start in time",
+  verify `~/.higgsfield-chrome` exists and `google-chrome` is on your PATH
+  (`which google-chrome`). Install Chrome with:
+  ```bash
+  cd /tmp && wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+  sudo apt install -y ./google-chrome-stable_current_amd64.deb
+  ```
 
 - **Long generation time**: Higgsfield takes 8-10 minutes to generate 4
   images at 2K quality. The script waits up to 15 minutes total.
