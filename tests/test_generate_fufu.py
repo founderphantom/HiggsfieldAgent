@@ -1,7 +1,8 @@
 """Tests for generate_fufu helper functions."""
+import asyncio
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -58,3 +59,27 @@ def test_timeout_raises_runtime_error():
                 with pytest.raises(RuntimeError, match="Chrome did not start in time"):
                     ensure_chrome_ready("http://localhost:9222", timeout=-1)
             mock_popen.assert_called_once()
+
+
+def test_run_generation_calls_ensure_chrome_ready():
+    """run_generation() must call ensure_chrome_ready before attaching the browser."""
+    with patch("generate_fufu.get_aspect_ratio_for_image", return_value="16:9"):
+        with patch("generate_fufu.ensure_chrome_ready") as mock_ensure:
+            with patch("generate_fufu.Browser") as mock_browser_cls:
+                mock_browser = MagicMock()
+                mock_browser.stop = AsyncMock()
+                mock_browser_cls.return_value = mock_browser
+
+                with patch("generate_fufu.Agent") as mock_agent_cls:
+                    mock_agent = MagicMock()
+                    mock_agent_cls.return_value = mock_agent
+                    mock_history = MagicMock()
+                    mock_history.final_result.return_value = "FAILED: test"
+                    mock_agent.run = AsyncMock(return_value=mock_history)
+
+                    from generate_fufu import run_generation
+                    asyncio.run(
+                        run_generation("/fake/image.png", cdp_url="http://localhost:9222")
+                    )
+
+                    mock_ensure.assert_called_once_with("http://localhost:9222")

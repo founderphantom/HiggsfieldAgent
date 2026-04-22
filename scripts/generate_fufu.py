@@ -2,7 +2,7 @@
 """Generate FUFU character variations on Higgsfield using browser-use.
 
 Usage:
-    python generate_fufu.py <image_path> [--chrome-profile <profile_dir>]
+    python generate_fufu.py <image_path> [--cdp-url <url>]
 
 Output (stdout JSON):
     {"status": "success", "links": ["url1", "url2", "url3", "url4"]}
@@ -190,37 +190,19 @@ def parse_result(result_text: str) -> dict:
     return {"status": "error", "message": f"Unexpected output: {text[:200]}"}
 
 
-async def run_generation(image_path: str, chrome_profile: str | None = None) -> dict:
+async def run_generation(image_path: str, cdp_url: str = "http://localhost:9222") -> dict:
     """Run the Higgsfield generation workflow using browser-use."""
     load_dotenv()
 
     aspect_ratio = get_aspect_ratio_for_image(image_path)
     task = build_task(image_path, aspect_ratio)
 
-    # Configure LLM via Google Gemini (requires GOOGLE_API_KEY env var)
     llm = ChatGoogle(model="gemini-3.1-flash-lite-preview")
 
-    # Configure browser — use system Chrome with persistent profile
-    # Anti-bot-detection args prevent Higgsfield from silently blocking
-    # the character grid API when it detects automation
-    anti_detect_args = [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-features=AutomationControlled",
-        "--no-first-run",
-        "--no-default-browser-check",
-    ]
+    ensure_chrome_ready(cdp_url)
 
-    if chrome_profile:
-        browser = Browser.from_system_chrome(
-            profile_directory=chrome_profile,
-            headless=False,
-            args=anti_detect_args,
-        )
-    else:
-        browser = Browser.from_system_chrome(
-            headless=False,
-            args=anti_detect_args,
-        )
+    # Attach to the running Chrome via CDP — no new process launched.
+    browser = Browser(cdp_url=cdp_url)
 
     agent = Agent(
         task=task,
@@ -233,12 +215,11 @@ async def run_generation(image_path: str, chrome_profile: str | None = None) -> 
 
     try:
         history = await agent.run()
-        # Extract the final result from agent history
-        final_result = history.final_result()
-        return parse_result(final_result)
+        return parse_result(history.final_result())
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
+        # Detach only — do not kill Chrome. The same process handles the next call.
         await browser.stop()
 
 
@@ -246,9 +227,9 @@ def main():
     parser = argparse.ArgumentParser(description="Generate FUFU variations on Higgsfield")
     parser.add_argument("image_path", help="Path to the inspiration image")
     parser.add_argument(
-        "--chrome-profile",
-        default=None,
-        help="Chrome profile directory name (e.g. 'Default', 'Profile 1')",
+        "--cdp-url",
+        default="http://localhost:9222",
+        help="Chrome DevTools Protocol endpoint (default: http://localhost:9222)",
     )
     args = parser.parse_args()
 
@@ -257,7 +238,7 @@ def main():
         print(json.dumps({"status": "error", "message": f"Image not found: {image_path}"}))
         sys.exit(1)
 
-    result = asyncio.run(run_generation(image_path, args.chrome_profile))
+    result = asyncio.run(run_generation(image_path, cdp_url=args.cdp_url))
     print(json.dumps(result))
 
     if result["status"] != "success":
