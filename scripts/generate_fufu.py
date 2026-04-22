@@ -57,18 +57,24 @@ def ensure_chrome_ready(cdp_url: str = "http://localhost:9222", timeout: int = 1
     parsed = urlparse(cdp_url)
     port = parsed.port or 9222
 
-    subprocess.Popen(
-        [
-            "google-chrome",
-            f"--user-data-dir={_CHROME_PROFILE_DIR}",
-            f"--remote-debugging-port={port}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-blink-features=AutomationControlled",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    try:
+        subprocess.Popen(
+            [
+                "google-chrome",
+                f"--user-data-dir={_CHROME_PROFILE_DIR}",
+                f"--remote-debugging-port={port}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-blink-features=AutomationControlled",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "google-chrome not found on PATH. "
+            "Install with: sudo apt install ./google-chrome-stable_current_amd64.deb"
+        )
 
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -197,7 +203,7 @@ async def run_generation(image_path: str, cdp_url: str = "http://localhost:9222"
     aspect_ratio = get_aspect_ratio_for_image(image_path)
     task = build_task(image_path, aspect_ratio)
 
-    llm = ChatGoogle(model="gemini-3.1-flash-lite-preview")
+    llm = ChatGoogle(model="gemini-2.0-flash")
 
     ensure_chrome_ready(cdp_url)
 
