@@ -1,8 +1,7 @@
 """Tests for generate_fufu helper functions."""
-import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -47,15 +46,15 @@ def test_not_running_launches_chrome_with_correct_args():
     launched_args = mock_popen.call_args[0][0]
     assert launched_args[0] == "google-chrome"
     assert "--remote-debugging-port=9222" in launched_args
-    assert any("--user-data-dir=" in a for a in launched_args)
+    assert any(a.startswith("--user-data-dir=") and ".higgsfield-chrome" in a for a in launched_args)
     assert "--disable-blink-features=AutomationControlled" in launched_args
 
 
 def test_timeout_raises_runtime_error():
     """Raise RuntimeError if Chrome never responds within the timeout window."""
     with patch("httpx.get", side_effect=httpx.ConnectError("connection refused")):
-        with patch("subprocess.Popen"):
+        with patch("subprocess.Popen") as mock_popen:
             with patch("time.sleep"):
-                # timeout=-1 → deadline is already past → polling loop never runs
                 with pytest.raises(RuntimeError, match="Chrome did not start in time"):
                     ensure_chrome_ready("http://localhost:9222", timeout=-1)
+            mock_popen.assert_called_once()

@@ -32,6 +32,14 @@ from PIL import Image
 _CHROME_PROFILE_DIR = str(Path.home() / ".higgsfield-chrome")
 
 
+def _chrome_is_up(version_url: str) -> bool:
+    """Return True if Chrome is answering on the CDP version endpoint."""
+    try:
+        return httpx.get(version_url, timeout=2.0).status_code == 200
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError):
+        return False
+
+
 def ensure_chrome_ready(cdp_url: str = "http://localhost:9222", timeout: int = 10) -> None:
     """Ensure Chrome is listening on the CDP port, launching it if necessary.
 
@@ -43,35 +51,29 @@ def ensure_chrome_ready(cdp_url: str = "http://localhost:9222", timeout: int = 1
     """
     version_url = f"{cdp_url}/json/version"
 
-    # Fast path: Chrome is already running.
-    try:
-        resp = httpx.get(version_url, timeout=2.0)
-        if resp.status_code == 200:
-            return
-    except httpx.ConnectError:
-        pass
+    if _chrome_is_up(version_url):
+        return
 
-    # Extract port from cdp_url so --remote-debugging-port matches.
     parsed = urlparse(cdp_url)
     port = parsed.port or 9222
 
-    subprocess.Popen([
-        "google-chrome",
-        f"--user-data-dir={_CHROME_PROFILE_DIR}",
-        f"--remote-debugging-port={port}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-blink-features=AutomationControlled",
-    ])
+    subprocess.Popen(
+        [
+            "google-chrome",
+            f"--user-data-dir={_CHROME_PROFILE_DIR}",
+            f"--remote-debugging-port={port}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-blink-features=AutomationControlled",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
     deadline = time.time() + timeout
     while time.time() < deadline:
-        try:
-            resp = httpx.get(version_url, timeout=2.0)
-            if resp.status_code == 200:
-                return
-        except httpx.ConnectError:
-            pass
+        if _chrome_is_up(version_url):
+            return
         time.sleep(1)
 
     raise RuntimeError(f"Chrome did not start in time (waited {timeout}s)")
