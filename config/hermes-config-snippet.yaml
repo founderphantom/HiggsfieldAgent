@@ -3,11 +3,7 @@
 
 skills:
   external_dirs:
-    - /mnt/c/Users/Mallika/Documents/HiggsfieldAgent/skills
-
-  config:
-    higgsfield-generate:
-      chrome_profile: Default
+    - /home/mallika/HiggsfieldAgent/skills
 
 platforms:
   telegram:
