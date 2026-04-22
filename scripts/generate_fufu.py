@@ -14,15 +14,67 @@ Requires env vars:
 import argparse
 import asyncio
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 from dotenv import load_dotenv
 
 from browser_use import Agent, Browser, ChatGoogle
 from get_aspect_ratio import closest_ratio
 
 from PIL import Image
+
+
+_CHROME_PROFILE_DIR = str(Path.home() / ".higgsfield-chrome")
+
+
+def ensure_chrome_ready(cdp_url: str = "http://localhost:9222", timeout: int = 10) -> None:
+    """Ensure Chrome is listening on the CDP port, launching it if necessary.
+
+    Attaches to an existing Chrome process if the port is already open.
+    Launches Chrome against ~/.higgsfield-chrome otherwise and polls until ready.
+    Never kills an existing Chrome process.
+
+    Raises RuntimeError if Chrome does not respond within `timeout` seconds.
+    """
+    version_url = f"{cdp_url}/json/version"
+
+    # Fast path: Chrome is already running.
+    try:
+        resp = httpx.get(version_url, timeout=2.0)
+        if resp.status_code == 200:
+            return
+    except httpx.ConnectError:
+        pass
+
+    # Extract port from cdp_url so --remote-debugging-port matches.
+    parsed = urlparse(cdp_url)
+    port = parsed.port or 9222
+
+    subprocess.Popen([
+        "google-chrome",
+        f"--user-data-dir={_CHROME_PROFILE_DIR}",
+        f"--remote-debugging-port={port}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-blink-features=AutomationControlled",
+    ])
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            resp = httpx.get(version_url, timeout=2.0)
+            if resp.status_code == 200:
+                return
+        except httpx.ConnectError:
+            pass
+        time.sleep(1)
+
+    raise RuntimeError(f"Chrome did not start in time (waited {timeout}s)")
 
 
 def get_aspect_ratio_for_image(image_path: str) -> str:
