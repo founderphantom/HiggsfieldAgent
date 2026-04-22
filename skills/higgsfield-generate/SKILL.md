@@ -48,9 +48,9 @@ If the user sends a text message with no image, reply with:
    
    Alternatively, if the repo is at a known path, use it directly:
    ```bash
-   /mnt/c/Users/Mallika/Documents/HiggsfieldAgent/.venv/bin/python \
-     /mnt/c/Users/Mallika/Documents/HiggsfieldAgent/scripts/generate_fufu.py \
-     "IMAGE_PATH" --chrome-profile "Default"
+   ~/HiggsfieldAgent/.venv/bin/python \
+     ~/HiggsfieldAgent/scripts/generate_fufu.py \
+     "IMAGE_PATH" --cdp-url http://localhost:9222
    ```
 
    The script outputs JSON to stdout:
