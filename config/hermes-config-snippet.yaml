@@ -3,7 +3,7 @@
 
 skills:
   external_dirs:
-    - /home/mallika/HiggsfieldAgent/skills
+    - /home/mallika/HiggsfieldAgent/skills  # replace 'mallika' with your WSL username
 
 platforms:
   telegram:

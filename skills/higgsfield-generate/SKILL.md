@@ -6,11 +6,6 @@ metadata:
   hermes:
     tags: [image-generation, higgsfield, telegram, browser-automation]
     category: creative
-    config:
-      - key: chrome_profile
-        description: "Chrome profile directory name for Higgsfield login persistence"
-        default: "Default"
-        prompt: "Chrome profile name (e.g. Default, Profile 1)"
 ---
 
 # Higgsfield FUFU Generator
@@ -95,7 +90,7 @@ The generation script requires:
 - **Python venv** at `.venv/` in the repo root with dependencies installed:
   ```bash
   python3 -m venv .venv
-  pip install -r requirements.txt
+  .venv/bin/pip install -r requirements.txt
   ```
 
 - **GOOGLE_API_KEY** environment variable (set in `.env` at repo root)
