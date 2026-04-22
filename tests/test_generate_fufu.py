@@ -70,16 +70,19 @@ def test_run_generation_calls_ensure_chrome_ready():
                 mock_browser.stop = AsyncMock()
                 mock_browser_cls.return_value = mock_browser
 
-                with patch("generate_fufu.Agent") as mock_agent_cls:
-                    mock_agent = MagicMock()
-                    mock_agent_cls.return_value = mock_agent
-                    mock_history = MagicMock()
-                    mock_history.final_result.return_value = "FAILED: test"
-                    mock_agent.run = AsyncMock(return_value=mock_history)
+                with patch("generate_fufu.ChatGoogle"):
+                    with patch("generate_fufu.Agent") as mock_agent_cls:
+                        mock_agent = MagicMock()
+                        mock_agent_cls.return_value = mock_agent
+                        mock_history = MagicMock()
+                        mock_history.final_result.return_value = "FAILED: test"
+                        mock_agent.run = AsyncMock(return_value=mock_history)
 
-                    from generate_fufu import run_generation
-                    asyncio.run(
-                        run_generation("/fake/image.png", cdp_url="http://localhost:9222")
-                    )
+                        from generate_fufu import run_generation
+                        asyncio.run(
+                            run_generation("/fake/image.png", cdp_url="http://localhost:9222")
+                        )
 
-                    mock_ensure.assert_called_once_with("http://localhost:9222")
+                        mock_ensure.assert_called_once_with("http://localhost:9222")
+                        mock_browser_cls.assert_called_once_with(cdp_url="http://localhost:9222")
+                        mock_browser.stop.assert_awaited_once()
