@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-import httpx
+from curl_cffi import requests as curl_requests
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -58,6 +58,7 @@ POLL_TIMEOUT = 900   # 15 minutes max
 # Session cache path
 # ---------------------------------------------------------------------------
 SESSION_CACHE = Path.home() / ".higgsfield_session"
+IMPERSONATE = "firefox133"
 
 
 # ---------------------------------------------------------------------------
@@ -79,14 +80,56 @@ def _api_headers(jwt: str) -> dict:
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
-def _get_jwt_for_session(session_id: str) -> str:
-    """Exchange a live Clerk session ID for a fresh short-lived JWT."""
-    url = f"{CLERK_BASE}/v1/client/sessions/{session_id}/tokens?{CLERK_PARAMS}"
-    with httpx.Client() as client:
-        resp = client.post(url, data={"organization_id": ""})
-    if resp.status_code != 200:
-        raise RuntimeError(f"Token refresh failed ({resp.status_code})")
-    return resp.json()["jwt"]
+def _log(msg: str) -> None:
+    print(f"[higgsfield] {msg}", file=sys.stderr)
+
+
+def _save_session(session_id: str, client_cookie: str) -> None:
+    SESSION_CACHE.write_text(json.dumps({
+        "session_id": session_id,
+        "client_cookie": client_cookie,
+    }))
+
+
+def _load_session() -> tuple[str, str] | None:
+    """Returns (session_id, client_cookie) or None if cache is missing/corrupt."""
+    if not SESSION_CACHE.exists():
+        return None
+    try:
+        data = json.loads(SESSION_CACHE.read_text().strip())
+        return data["session_id"], data["client_cookie"]
+    except Exception:
+        return None
+
+
+def _get_jwt_for_session(session_id: str, session: object = None) -> str:
+    """Exchange a live Clerk session ID for a fresh short-lived JWT.
+
+    Pass `session` to reuse an existing curl_cffi session with its cookies
+    intact (required right after fresh login). Without it, the saved
+    __client cookie is injected so Clerk can locate the session owner.
+    """
+    url = f"{CLERK_BASE}/v1/client/sessions/{session_id}/tokens?debug=skip_cache&{CLERK_PARAMS}"
+
+    def _fetch(s):
+        resp = s.post(url, data={"organization_id": ""})
+        if resp.status_code != 200:
+            raise RuntimeError(f"Token refresh failed ({resp.status_code})")
+        return resp.json()["jwt"]
+
+    if session is not None:
+        return _fetch(session)
+
+    # Inject the saved __client cookie so Clerk recognises the session owner
+    cached = _load_session()
+    with curl_requests.Session(impersonate=IMPERSONATE) as s:
+        s.get(f"{CLERK_BASE}/v1/environment?{CLERK_PARAMS}")
+        if cached:
+            _, client_cookie = cached
+            s.cookies.set("__client", client_cookie, domain=".higgsfield.ai")
+        else:
+            s.get(f"{CLERK_BASE}/v1/client?{CLERK_PARAMS}")
+        return _fetch(s)
 
 
 def login_full(email: str, password: str) -> str:
@@ -97,9 +140,15 @@ def login_full(email: str, password: str) -> str:
     """
     base_url = f"{CLERK_BASE}/v1/client/sign_ins?{CLERK_PARAMS}"
 
-    with httpx.Client() as client:
+    with curl_requests.Session(impersonate=IMPERSONATE) as s:
+        # Warm up: establish __client cookie and Cloudflare cookies (matches browser flow)
+        _log("Establishing client session...")
+        s.get(f"{CLERK_BASE}/v1/environment?{CLERK_PARAMS}")
+        s.get(f"{CLERK_BASE}/v1/client?{CLERK_PARAMS}")
+
         # Step 1: password
-        r = client.post(base_url, data={
+        _log("Submitting password...")
+        r = s.post(base_url, data={
             "locale": "en-US",
             "identifier": email,
             "password": password,
@@ -111,14 +160,17 @@ def login_full(email: str, password: str) -> str:
         idn_id = resp_data["supported_second_factors"][0]["email_address_id"]
 
         # Step 2: trigger OTP email
-        client.post(
+        _log("Requesting verification code email...")
+        s.post(
             f"{CLERK_BASE}/v1/client/sign_ins/{sia_id}/prepare_second_factor?{CLERK_PARAMS}",
             data={"strategy": "email_code", "email_address_id": idn_id},
         )
+        _log("Verification code sent — check your email.")
 
         # Step 3: submit OTP (prompts user)
-        code = input("Enter the verification code sent to your email: ").strip()
-        r2 = client.post(
+        code = input("Enter the verification code: ").strip()
+        _log("Submitting verification code...")
+        r2 = s.post(
             f"{CLERK_BASE}/v1/client/sign_ins/{sia_id}/attempt_second_factor?{CLERK_PARAMS}",
             data={"strategy": "email_code", "code": code},
         )
@@ -128,19 +180,35 @@ def login_full(email: str, password: str) -> str:
             )
         session_id = r2.json()["response"]["created_session_id"]
 
-    # Cache session for future runs
-    SESSION_CACHE.write_text(session_id)
+        # Step 4: activate the session (browser always does this after sign-in)
+        _log("Activating session...")
+        s.post(
+            f"{CLERK_BASE}/v1/client/sessions/{session_id}/touch?{CLERK_PARAMS}",
+            data={"active_organization_id": "", "intent": "select_session"},
+        )
 
-    return _get_jwt_for_session(session_id)
+        # Step 5: get JWT while the session's cookies are still live
+        _log("Fetching JWT...")
+        jwt = _get_jwt_for_session(session_id, session=s)
+
+        # Save session + __client cookie so future runs can refresh without OTP
+        client_cookie = s.cookies.get("__client", "")
+
+    _log("Login complete. Session cached.")
+    _save_session(session_id, client_cookie)
+    return jwt
 
 
 def get_jwt(email: str, password: str) -> str:
     """Return a fresh JWT. Uses cached session if available, else full login."""
-    if SESSION_CACHE.exists():
-        session_id = SESSION_CACHE.read_text().strip()
+    cached = _load_session()
+    if cached:
+        session_id, _ = cached
+        _log("Using cached session...")
         try:
             return _get_jwt_for_session(session_id)
         except RuntimeError:
+            _log("Cached session expired, doing full login.")
             SESSION_CACHE.unlink(missing_ok=True)
     return login_full(email, password)
 
@@ -159,45 +227,49 @@ def upload_image(jwt: str, image_path: str) -> tuple[str, str]:
     headers = _api_headers(jwt)
     img_path = Path(image_path)
 
-    with httpx.Client(headers=headers) as client:
+    _log(f"Uploading image: {img_path.name}")
+    with curl_requests.Session(impersonate=IMPERSONATE) as s:
         # Step 1: reserve upload slot
-        r = client.post(
+        r = s.post(
             f"{API_BASE}/media/batch",
             json={
                 "mimetypes": ["image/jpeg"],
                 "source": "user_upload",
                 "force_ip_check": False,
             },
+            headers=headers,
         )
         if r.status_code != 200:
             raise RuntimeError(f"Media batch failed ({r.status_code}): {r.text[:200]}")
         slot = r.json()[0]
-        media_id = slot["id"]
-        cdn_url = slot["url"]
+        media_id   = slot["id"]
+        cdn_url    = slot["url"]
         upload_url = slot["upload_url"]
 
-        # Step 2: PUT raw bytes to presigned S3 URL (no auth header needed)
+        _log(f"Upload slot reserved: {media_id}")
+        # Step 2: PUT raw bytes — separate clean session (presigned URL, no auth header)
+        _log("Uploading to S3...")
         with open(img_path, "rb") as f:
             image_bytes = f.read()
-        put_resp = client.put(
-            upload_url,
-            content=image_bytes,
-            headers={"Content-Type": "image/jpeg"},
-        )
+        with curl_requests.Session(impersonate=IMPERSONATE) as s3:
+            put_resp = s3.put(upload_url, data=image_bytes, headers={"Content-Type": "image/jpeg"})
         if put_resp.status_code not in (200, 204):
             raise RuntimeError(f"S3 upload failed ({put_resp.status_code})")
+        _log("S3 upload done. Confirming with Higgsfield...")
 
         # Step 3: confirm upload
-        r2 = client.post(
+        r2 = s.post(
             f"{API_BASE}/media/{media_id}/upload",
             json={
                 "filename": img_path.name,
                 "force_nsfw_check": True,
                 "force_ip_check": False,
             },
+            headers=headers,
         )
         if r2.status_code != 200:
             raise RuntimeError(f"Upload confirm failed ({r2.status_code}): {r2.text[:200]}")
+        _log("Image upload confirmed.")
 
     return media_id, cdn_url
 
@@ -244,19 +316,25 @@ def start_generation(
         },
         "use_unlim": False,
     }
-    with httpx.Client(headers=_api_headers(jwt)) as client:
-        resp = client.post(f"{API_BASE}/jobs/v2/text2image_soul_v2", json=payload)
+    _log(f"Triggering generation (aspect_ratio={aspect_ratio}, quality={SOUL_V2_QUALITY}, batch={SOUL_V2_BATCH})...")
+    with curl_requests.Session(impersonate=IMPERSONATE) as s:
+        resp = s.post(f"{API_BASE}/jobs/v2/text2image_soul_v2", json=payload, headers=_api_headers(jwt))
     if resp.status_code != 200:
         raise RuntimeError(f"Generation failed ({resp.status_code}): {resp.text[:200]}")
     jobs = resp.json()["job_sets"][0]["jobs"]
-    return [j["id"] for j in jobs]
+    job_ids = [j["id"] for j in jobs]
+    _log(f"Generation started. Job IDs: {job_ids}")
+    return job_ids
 
 
 # ---------------------------------------------------------------------------
 # Poll + share
 # ---------------------------------------------------------------------------
-def poll_jobs(jwt: str, job_ids: list[str], timeout: int = POLL_TIMEOUT) -> None:
-    """Poll all job IDs until every one reaches 'completed'. Raises on timeout."""
+def poll_jobs(jwt: str, job_ids: list[str], timeout: int = POLL_TIMEOUT) -> str:
+    """Poll all job IDs until every one reaches 'completed'. Raises on timeout.
+
+    Returns the JWT in use at completion — may be refreshed if it expired mid-poll.
+    """
     headers = _api_headers(jwt)
     deadline = time.time() + timeout
     pending = set(job_ids)
@@ -268,32 +346,47 @@ def poll_jobs(jwt: str, job_ids: list[str], timeout: int = POLL_TIMEOUT) -> None
                 f"({len(pending)} jobs still pending)"
             )
         still_pending = set()
-        with httpx.Client(headers=headers) as client:
+        with curl_requests.Session(impersonate=IMPERSONATE) as s:
             for job_id in pending:
-                resp = client.get(f"{API_BASE}/jobs/{job_id}/status")
+                resp = s.get(f"{API_BASE}/jobs/{job_id}/status", headers=headers)
+                if resp.status_code == 401:
+                    # JWT expired mid-poll — refresh and retry once
+                    _log("JWT expired during polling, refreshing...")
+                    cached = _load_session()
+                    jwt = _get_jwt_for_session(cached[0] if cached else "")
+                    headers = _api_headers(jwt)
+                    resp = s.get(f"{API_BASE}/jobs/{job_id}/status", headers=headers)
                 if resp.status_code != 200:
                     raise RuntimeError(f"Poll failed for {job_id} ({resp.status_code})")
                 status = resp.json().get("status", "")
                 if status == "completed":
+                    _log(f"  {job_id[:8]}... completed")
                     continue
                 if status in ("failed", "error"):
                     raise RuntimeError(f"Job {job_id} failed: {resp.json()}")
                 still_pending.add(job_id)
         pending = still_pending
         if pending:
+            _log(f"Waiting — {len(pending)} job(s) still pending...")
             time.sleep(POLL_INTERVAL)
+    return jwt
 
 
 def get_share_links(jwt: str, job_ids: list[str]) -> list[str]:
-    """PATCH sharing-configs for each job to enable sharing.
+    """GET then PATCH sharing-configs for each job to enable sharing.
 
+    The GET creates the initial config record (no_access); the PATCH sets it
+    to edit-access. Skipping the GET causes PATCH to 404.
     Returns list of higg.ai short URLs, one per job_id.
     """
     headers = _api_headers(jwt)
     links = []
-    with httpx.Client(headers=headers) as client:
+    with curl_requests.Session(impersonate=IMPERSONATE) as s:
         for job_id in job_ids:
-            resp = client.patch(
+            # GET first — creates the sharing config record if it doesn't exist
+            s.get(f"{API_BASE}/sharing-configs?asset_id={job_id}", headers=headers)
+
+            resp = s.patch(
                 f"{API_BASE}/sharing-configs?asset_id={job_id}",
                 json={
                     "link_access_level": "edit",
@@ -303,6 +396,7 @@ def get_share_links(jwt: str, job_ids: list[str]) -> list[str]:
                         "&utm_campaign=asset_share&utm_content=image"
                     ),
                 },
+                headers=headers,
             )
             if resp.status_code != 200:
                 raise RuntimeError(
@@ -313,10 +407,65 @@ def get_share_links(jwt: str, job_ids: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Download
+# ---------------------------------------------------------------------------
+def get_raw_urls(jwt: str, job_ids: list[str]) -> dict[str, str]:
+    """Return {job_id: raw_cdn_url} for every job_id in the list."""
+    headers = _api_headers(jwt)
+    with curl_requests.Session(impersonate=IMPERSONATE) as s:
+        resp = s.get(f"{API_BASE}/assets?size=1001&category=image", headers=headers)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Assets fetch failed ({resp.status_code}): {resp.text[:200]}")
+    target = set(job_ids)
+    return {
+        item["id"]: item["raw_url"]
+        for item in resp.json().get("items", [])
+        if item["id"] in target and item.get("raw_url")
+    }
+
+
+def download_images(jwt: str, job_ids: list[str], image_path: str) -> list[str]:
+    """Download generated images next to the input image.
+
+    Files are saved as {stem}_out_1.png … {stem}_out_N.png in the same
+    directory as image_path. Returns the list of saved absolute paths.
+    """
+    raw_urls = get_raw_urls(jwt, job_ids)
+    img_path = Path(image_path)
+    output_dir = img_path.parent
+    stem = img_path.stem
+    saved = []
+    for n, job_id in enumerate(job_ids, 1):
+        url = raw_urls.get(job_id)
+        if not url:
+            _log(f"  No raw_url for {job_id[:8]}... skipping")
+            continue
+        ext = Path(url.split("?")[0]).suffix or ".png"
+        out_path = output_dir / f"{stem}_out_{n}{ext}"
+        _log(f"  Downloading image {n}/{len(job_ids)}: {out_path.name}")
+        # Fresh session per image — avoids CDN dropping a reused connection mid-transfer
+        for attempt in range(3):
+            try:
+                with curl_requests.Session(impersonate=IMPERSONATE) as s:
+                    resp = s.get(url)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Image download failed for {job_id} ({resp.status_code})")
+                out_path.write_bytes(resp.content)
+                saved.append(str(out_path))
+                break
+            except Exception as exc:
+                if attempt == 2:
+                    raise RuntimeError(f"Image download failed for {job_id} after 3 attempts: {exc}") from exc
+                _log(f"  Retrying image {n} (attempt {attempt + 2}/3)...")
+                time.sleep(2)
+    return saved
+
+
+# ---------------------------------------------------------------------------
 # Pipeline + CLI
 # ---------------------------------------------------------------------------
 def run_generation(image_path: str) -> dict:
-    """Full pipeline: auth -> upload -> generate -> poll -> share links."""
+    """Full pipeline: auth -> upload -> generate -> poll -> share links -> download."""
     load_dotenv()
     email = os.environ.get("HIGGSFIELD_EMAIL", "")
     password = os.environ.get("HIGGSFIELD_PASSWORD", "")
@@ -332,13 +481,19 @@ def run_generation(image_path: str) -> dict:
 
         with Image.open(image_path) as img:
             aspect_ratio = closest_ratio(*img.size)
+        _log(f"Image aspect ratio: {aspect_ratio}")
 
         jwt = get_jwt(email, password)
         media_id, media_url = upload_image(jwt, image_path)
         job_ids = start_generation(jwt, media_id, media_url, aspect_ratio)
-        poll_jobs(jwt, job_ids)
+        _log("Polling for completion (this takes ~8 minutes)...")
+        jwt = poll_jobs(jwt, job_ids)
+        _log("All jobs complete. Fetching share links...")
         links = get_share_links(jwt, job_ids)
-        return {"status": "success", "links": links}
+        _log("Downloading images...")
+        local_paths = download_images(jwt, job_ids, image_path)
+        _log("Done!")
+        return {"status": "success", "links": links, "local_paths": local_paths}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
