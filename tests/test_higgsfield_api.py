@@ -59,6 +59,50 @@ def test_login_full_flow_prompts_otp_and_returns_jwt():
     assert json.loads(written)["session_id"] == "sess_new"
 
 
+def test_login_auto_otp_fetches_code_from_gmail():
+    sign_in_resp = MagicMock(status_code=200)
+    sign_in_resp.json.return_value = {
+        "response": {
+            "id": "sia_test",
+            "status": "needs_second_factor",
+            "supported_second_factors": [
+                {"strategy": "email_code", "email_address_id": "idn_test"}
+            ],
+        }
+    }
+    attempt_resp = MagicMock(status_code=200)
+    attempt_resp.json.return_value = {
+        "response": {"status": "complete", "created_session_id": "sess_auto"}
+    }
+    jwt_resp = MagicMock(status_code=200)
+    jwt_resp.json.return_value = {"jwt": "auto.jwt.token"}
+
+    with patch("higgsfield_api._fetch_otp_from_gmail", return_value="654321") as mock_otp, \
+         patch("higgsfield_api.SESSION_CACHE") as mock_cache, \
+         patch.dict("os.environ", {"HIGGSFIELD_AUTO_OTP": "1"}), \
+         patch(f"{_SESSION}.post", side_effect=[
+             sign_in_resp,
+             MagicMock(status_code=200),  # prepare_second_factor
+             attempt_resp,
+             MagicMock(status_code=200),  # touch
+             jwt_resp,
+         ]):
+        from higgsfield_api import login_full
+        token = login_full("user@example.com", "password123")
+    assert token == "auto.jwt.token"
+    mock_otp.assert_called_once()
+
+
+def test_fetch_otp_from_gmail_extracts_code():
+    search_output = json.dumps([{"id": "msg_abc"}])
+    body_output = json.dumps({"body": "Your verification code is 847291. It expires in 10 minutes."})
+    with patch("subprocess.check_output", side_effect=[search_output, body_output]), \
+         patch("time.sleep"):
+        from higgsfield_api import _fetch_otp_from_gmail
+        code = _fetch_otp_from_gmail(poll_interval=0, max_attempts=1)
+    assert code == "847291"
+
+
 # ---------------------------------------------------------------------------
 # Upload
 # ---------------------------------------------------------------------------

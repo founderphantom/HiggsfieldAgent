@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Set up a `higgsfield` Hermes profile on a second computer that listens on Telegram. When the user sends one or more photos, the agent runs `scripts/higgsfield_api.py` on each image (one at a time), and sends all 4 generated PNG variations back to the user on Telegram before moving on to the next photo.
+**Goal:** Set up a `higgsfield` Hermes profile on a second computer that listens on Telegram. When the user sends one or more photos, the agent runs `scripts/higgsfield_api.py` on each image (one at a time), and sends all 4 generated PNG variations back to the user on Telegram before moving on to the next photo. Gmail is used to auto-fetch the Higgsfield OTP on first login — no manual code entry needed.
 
-**Architecture:** Single Hermes profile (`higgsfield`) with a custom skill (`higgsfield-fufu`). No browser toolset needed — `higgsfield_api.py` handles the full pipeline directly. The Telegram gateway receives the photo, saves it locally, runs the script as a subprocess, reads `local_paths` from the JSON output, and sends each image file back via the native Telegram delivery.
+**Architecture:** Single Hermes profile (`higgsfield`) with a custom skill (`higgsfield-fufu`) and the bundled Google Workspace skill for Gmail access. On the very first run, `HIGGSFIELD_AUTO_OTP=1` tells `higgsfield_api.py` to poll Gmail via `$GAPI` for the verification code instead of blocking on stdin. After the session is cached, OTP is never needed again.
 
-**Tech Stack:** Hermes Agent (v2026.4.16), Python 3.11+, `scripts/higgsfield_api.py` (this repo), Telegram gateway
+**Tech Stack:** Hermes Agent (v2026.4.16), Python 3.11+, `scripts/higgsfield_api.py` (this repo), Telegram gateway, Google Workspace skill (`$GAPI`)
 
 **Reference:** `scripts/higgsfield_api.py`, `tests/test_higgsfield_api.py`
 
@@ -16,7 +16,7 @@
 
 - `scripts/higgsfield_api.py` is complete and end-to-end tested ✅
 - Output contract: `{"status": "success", "links": [...], "local_paths": [...]}` ✅
-- Cached Higgsfield session at `~/.higgsfield_session` (JSON format with `session_id` + `client_cookie`) — the first run on the second computer will require one OTP login, after which the session is cached
+- `HIGGSFIELD_AUTO_OTP=1` env var support added to `login_full()` — polls Gmail via `$GAPI` subprocess ✅
 
 ---
 
@@ -32,10 +32,12 @@
 
 ~/.hermes/profiles/higgsfield/
 ├── .env                            # TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USERS
+│                                   # + HIGGSFIELD_EMAIL + HIGGSFIELD_PASSWORD
+│                                   # + HIGGSFIELD_AUTO_OTP=1
 ├── config.yaml                     # profile config
 └── skills/
     └── higgsfield-fufu/
-        └── SKILL.md                # the skill (written in Task 5)
+        └── SKILL.md                # the skill (written in Task 6)
 ```
 
 ---
@@ -64,7 +66,7 @@ hermes --version
 
 ```bash
 git clone <your-remote-url> ~/HiggsfieldAgent
-# OR copy from main computer if no remote:
+# OR copy from main computer via scp:
 # scp -r /path/to/HiggsfieldAgent user@second-computer:~/HiggsfieldAgent
 ```
 
@@ -83,15 +85,6 @@ HIGGSFIELD_EMAIL=founder@phantomsys.dev
 HIGGSFIELD_PASSWORD=<password>
 EOF
 ```
-
-- [ ] **Step 4: Smoke test the script (will prompt for OTP on first run)**
-
-```bash
-# Copy a test photo over, then:
-python3 ~/HiggsfieldAgent/scripts/higgsfield_api.py ~/HiggsfieldAgent/tests/photo.jpg
-```
-
-  After entering the OTP once, `~/.higgsfield_session` is saved. Subsequent runs skip the OTP entirely.
 
 ---
 
@@ -115,18 +108,63 @@ hermes -p higgsfield setup
   - Paste the `TELEGRAM_BOT_TOKEN` from BotFather
   - Paste your `TELEGRAM_ALLOWED_USERS` (numeric user ID)
 
-- [ ] **Step 3: Verify the profile .env was written**
+- [ ] **Step 3: Add Higgsfield credentials and auto-OTP flag to profile .env**
 
 ```bash
-cat ~/.hermes/profiles/higgsfield/.env
-# Should contain TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS
+cat >> ~/.hermes/profiles/higgsfield/.env << 'EOF'
+HIGGSFIELD_EMAIL=founder@phantomsys.dev
+HIGGSFIELD_PASSWORD=<password>
+HIGGSFIELD_AUTO_OTP=1
+EOF
 ```
 
 ---
 
-## Task 4: Configure the profile
+## Task 4: Set up Google Workspace (Gmail OAuth)
 
-- [ ] **Step 1: Set `terminal.cwd` so the agent always operates from the repo**
+This enables `$GAPI` — the Hermes CLI that reads your Gmail inbox. Required for auto-fetching the Higgsfield OTP on first login.
+
+- [ ] **Step 1: Create a Google Cloud project and OAuth credentials**
+
+  1. Go to [console.cloud.google.com](https://console.cloud.google.com)
+  2. Create a new project (e.g. `hermes-higgsfield`)
+  3. Enable the **Gmail API**: APIs & Services → Library → search "Gmail API" → Enable
+  4. Go to APIs & Services → **Credentials** → Create Credentials → **OAuth 2.0 Client ID**
+  5. Application type: **Desktop app** → name it anything → Create
+  6. Download the generated JSON file (e.g. `client_secret_xxxx.json`)
+
+- [ ] **Step 2: Add yourself as a test user (required while app is in testing)**
+
+  1. APIs & Services → **OAuth consent screen** → **Test users** → Add Users
+  2. Add: `founder@phantomsys.dev`
+
+- [ ] **Step 3: Register the client secret with the higgsfield profile**
+
+```bash
+hermes -p higgsfield chat -q "$GSETUP --client-secret ~/Downloads/client_secret_xxxx.json"
+```
+
+- [ ] **Step 4: Authorize Gmail access**
+
+```bash
+hermes -p higgsfield chat -q "$GSETUP --auth-url --services email --format json"
+```
+
+  The command returns a `auth_url`. Open it in a browser, sign in as `founder@phantomsys.dev`, and grant access. The browser will redirect to `http://localhost:1` and show an error — that's expected. Copy the full redirect URL from the address bar and paste it back into the chat.
+
+- [ ] **Step 5: Verify Gmail access works**
+
+```bash
+hermes -p higgsfield chat -q '$GAPI gmail search "is:unread" --max 3'
+```
+
+  Should return a JSON array of recent emails.
+
+---
+
+## Task 5: Configure the profile
+
+- [ ] **Step 1: Set `terminal.cwd` and enable Telegram reactions**
 
 Edit `~/.hermes/profiles/higgsfield/config.yaml`:
 
@@ -140,7 +178,7 @@ telegram:
 
 ---
 
-## Task 5: Write the `higgsfield-fufu` skill
+## Task 6: Write the `higgsfield-fufu` skill
 
 - [ ] **Step 1: Create the skill directory**
 
@@ -182,18 +220,25 @@ Activate this skill whenever the user sends a photo or image file on Telegram �
 
 1. **Receive photos.** The user's sent photo(s) are available as local file paths from the Telegram gateway. Each attached image is already saved to a temp path.
 
-2. **Process each photo one at a time.** For every photo path (in order):
+2. **Inform the user upfront** before starting any generation:
+   > "Generating 4 variations — this takes about 8 minutes ⏳"
+   
+   If multiple photos: "Processing N photos — about 8 minutes each ⏳"
+
+3. **Check if this is a first-time login.** If `~/.higgsfield_session` does not exist, the script will perform a full login and auto-fetch the OTP from Gmail (`HIGGSFIELD_AUTO_OTP=1` is already set in the profile `.env`). No action needed — it's fully automatic.
+
+4. **Process each photo one at a time.** For every photo path (in order):
 
    a. Run the generation script:
    ```bash
-   python3 ~/HiggsfieldAgent/scripts/higgsfield_api.py "<photo_path>"
+   HIGGSFIELD_AUTO_OTP=1 python3 ~/HiggsfieldAgent/scripts/higgsfield_api.py "<photo_path>"
    ```
 
-   b. The script writes a JSON result to stdout. Parse it:
-   - On `"status": "error"` — reply to the user with the error message and continue to the next photo.
-   - On `"status": "success"` — extract `local_paths` (list of 4 PNG file paths).
+   b. Parse the JSON result from stdout:
+   - On `"status": "error"` — reply with the error message and continue to the next photo.
+   - On `"status": "success"` — extract `local_paths` (list of 4 PNG file paths) and `links` (4 share URLs).
 
-   c. Send each of the 4 files in `local_paths` back to the user as Telegram photos (not as documents). Use the share links from `links` as the caption for the first image, e.g.:
+   c. Send each of the 4 files in `local_paths` back to the user as Telegram **photos** (not documents). Caption the first image:
    ```
    Generated 4 variations ✅
    1. <links[0]>
@@ -202,28 +247,27 @@ Activate this skill whenever the user sends a photo or image file on Telegram �
    4. <links[3]>
    ```
 
-   d. Inform the user of progress when processing multiple photos:
+   d. When processing multiple photos, announce progress before each one:
    > "Processing photo 2 of 3…"
-
-3. **First-run note.** On the very first run after install the script will prompt for an email OTP. This only happens once — the session is cached in `~/.higgsfield_session`. If you see an EOF error, tell the user to run the script manually once in the terminal to complete the one-time login.
 
 ## Pitfalls
 
-- **EOF / OTP prompt on first run:** The session cache doesn't exist yet. Run `python3 ~/HiggsfieldAgent/scripts/higgsfield_api.py tests/photo.jpg` once in a real terminal and enter the OTP code. After that, all Hermes-triggered runs will skip OTP.
-- **Generation takes ~8 minutes.** Set user expectations upfront: reply with "Generating 4 variations — this takes about 8 minutes ⏳" before starting the script.
-- **Multiple photos in one message.** Process sequentially — do not attempt to run them in parallel (each run uses Higgsfield credits and a separate upload slot).
-- **Script not found.** Confirm `~/HiggsfieldAgent/scripts/higgsfield_api.py` exists. The repo must be cloned on this machine.
+- **Auto-OTP Gmail polling:** The script polls Gmail every 10 seconds for up to 2 minutes after sending the OTP email. If the email doesn't arrive in time, the script will raise a `RuntimeError`. Retry once — it usually arrives within 30 seconds.
+- **Generation takes ~8 minutes.** Always set user expectations before running. Don't wait in silence.
+- **Multiple photos in one message.** Process sequentially — running them in parallel would exhaust Higgsfield credits and cause upload collisions.
+- **Script not found.** Confirm `~/HiggsfieldAgent/scripts/higgsfield_api.py` exists and the repo is cloned.
+- **`$GAPI` not found.** Ensure the Google Workspace skill OAuth setup (Task 4) was completed and `$GAPI` resolves correctly in the profile shell environment.
 
 ## Verification
 
 - The script exits 0 and prints `{"status": "success", ...}` to stdout.
 - 4 PNG files appear in the same directory as the input photo (`photo_out_1.png` … `photo_out_4.png`).
-- All 4 images are delivered to the user on Telegram.
+- All 4 images are delivered to the user on Telegram with share link captions.
 ```
 
 ---
 
-## Task 6: Start the gateway and test
+## Task 7: Start the gateway and test
 
 - [ ] **Step 1: Start the Hermes gateway for the higgsfield profile**
 
@@ -231,7 +275,7 @@ Activate this skill whenever the user sends a photo or image file on Telegram �
 hermes -p higgsfield gateway start
 ```
 
-  Or to run as a background service:
+  Or as a background daemon:
 
 ```bash
 hermes -p higgsfield gateway start --daemon
@@ -241,28 +285,29 @@ hermes -p higgsfield gateway start --daemon
 
   - Open Telegram, message your bot
   - Send a photo
-  - Expected bot response: "Generating 4 variations — this takes about 8 minutes ⏳"
+  - Expected: bot replies "Generating 4 variations — this takes about 8 minutes ⏳"
+  - On first run: script auto-fetches OTP from Gmail (no terminal input needed)
   - After ~8 minutes: 4 PNG images delivered + share links in caption
 
 - [ ] **Step 3: Test multi-photo batch**
 
   - Send 2 photos in the same message
-  - Confirm the bot processes them sequentially and delivers 4 images per photo (8 total)
+  - Confirm the bot processes them one at a time, delivering 4 images per photo (8 total)
 
 ---
 
-## Task 7: (Optional) Run gateway as a system service
+## Task 8: (Optional) Run gateway as a system service
 
 To keep the gateway running after SSH disconnect or reboot:
 
 ```bash
-# Using systemd (Linux)
+# Using systemd (Linux/WSL)
 hermes -p higgsfield gateway install-service
 systemctl --user enable hermes-higgsfield
 systemctl --user start hermes-higgsfield
 ```
 
-Or using a simple tmux session:
+Or using tmux:
 
 ```bash
 tmux new-session -d -s higgsfield 'hermes -p higgsfield gateway start'

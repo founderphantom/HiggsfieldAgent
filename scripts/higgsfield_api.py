@@ -19,6 +19,8 @@ import argparse
 import json
 import os
 import random
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -132,10 +134,48 @@ def _get_jwt_for_session(session_id: str, session: object = None) -> str:
         return _fetch(s)
 
 
+def _fetch_otp_from_gmail(poll_interval: int = 10, max_attempts: int = 12) -> str:
+    """Poll Gmail for the Higgsfield OTP email and return the 6-digit code.
+
+    Requires $GAPI (Hermes Google Workspace CLI) to be available.
+    Polls every poll_interval seconds for up to max_attempts tries (~2 minutes).
+    Set HIGGSFIELD_AUTO_OTP=1 to activate this path instead of stdin input.
+    """
+    gapi = os.environ.get("GAPI", "gapi")
+    _log(f"Auto-OTP: polling Gmail every {poll_interval}s (up to {max_attempts} attempts)...")
+    for attempt in range(1, max_attempts + 1):
+        time.sleep(poll_interval)
+        _log(f"  Checking Gmail (attempt {attempt}/{max_attempts})...")
+        try:
+            search_out = subprocess.check_output(
+                [gapi, "gmail", "search",
+                 "from:higgsfield newer_than:5m subject:verification",
+                 "--max", "1"],
+                text=True,
+            )
+            messages = json.loads(search_out)
+            if not messages:
+                continue
+            msg_out = subprocess.check_output(
+                [gapi, "gmail", "get", messages[0]["id"]],
+                text=True,
+            )
+            body = json.loads(msg_out).get("body", "")
+            match = re.search(r'\b(\d{6})\b', body)
+            if match:
+                code = match.group(1)
+                _log(f"  OTP found: {code}")
+                return code
+        except Exception as exc:
+            _log(f"  Gmail check failed: {exc}")
+    raise RuntimeError("Auto-OTP: no verification email found in Gmail after 2 minutes")
+
+
 def login_full(email: str, password: str) -> str:
     """Full Clerk login: password + OTP -> session -> JWT.
 
     Prompts stdin for the 6-digit OTP code sent to the account email.
+    If HIGGSFIELD_AUTO_OTP=1 is set, fetches the code from Gmail via $GAPI instead.
     Caches the new session ID to SESSION_CACHE for future runs.
     """
     base_url = f"{CLERK_BASE}/v1/client/sign_ins?{CLERK_PARAMS}"
@@ -167,8 +207,11 @@ def login_full(email: str, password: str) -> str:
         )
         _log("Verification code sent — check your email.")
 
-        # Step 3: submit OTP (prompts user)
-        code = input("Enter the verification code: ").strip()
+        # Step 3: submit OTP — auto-fetch from Gmail or prompt stdin
+        if os.environ.get("HIGGSFIELD_AUTO_OTP"):
+            code = _fetch_otp_from_gmail()
+        else:
+            code = input("Enter the verification code: ").strip()
         _log("Submitting verification code...")
         r2 = s.post(
             f"{CLERK_BASE}/v1/client/sign_ins/{sia_id}/attempt_second_factor?{CLERK_PARAMS}",
