@@ -108,15 +108,19 @@ hermes -p higgsfield setup
   - Paste the `TELEGRAM_BOT_TOKEN` from BotFather
   - Paste your `TELEGRAM_ALLOWED_USERS` (numeric user ID)
 
-- [ ] **Step 3: Add Higgsfield credentials and auto-OTP flag to profile .env**
+- [ ] **Step 3: Add Higgsfield credentials, auto-OTP flag, and both user IDs to profile .env**
 
 ```bash
 cat >> ~/.hermes/profiles/higgsfield/.env << 'EOF'
 HIGGSFIELD_EMAIL=founder@phantomsys.dev
 HIGGSFIELD_PASSWORD=<password>
 HIGGSFIELD_AUTO_OTP=1
+# Both users who will send photos in the group chat (comma-separated)
+TELEGRAM_ALLOWED_USERS=5938713749,1004169493
 EOF
 ```
+
+  Group chat ID: `-5151614924` (already set in `config/hermes-config-snippet.yaml`).
 
 ---
 

@@ -1,21 +1,24 @@
 # Merge this into ~/.hermes/profiles/higgsfield/config.yaml
-# Or manually copy the relevant blocks into your existing config.
+# This loads the higgsfield-fufu skill directly from the repo
+# and binds it to the shared group chat.
 
 skills:
   external_dirs:
-    - /home/mallika/HiggsfieldAgent/skills  # replace 'mallika' with your WSL username
+    - ~/HiggsfieldAgent/skills   # loads skills/higgsfield-fufu/SKILL.md
+
+terminal:
+  cwd: ~/HiggsfieldAgent
+
+telegram:
+  reactions: true                # 👀 processing  ✅ done  ❌ error
 
 platforms:
   telegram:
     extra:
-      dm_topics:
-      - chat_id: 5938713749
+      group_topics:
+      - chat_id: -5151614924
         topics:
         - name: FUFU Generator
-          icon_color: 9367192
-          skill: higgsfield-generate
-      - chat_id: 1004169493
-        topics:
-        - name: FUFU Generator
-          icon_color: 9367192
-          skill: higgsfield-generate
+          skill: higgsfield-fufu
+          # thread_id: omit for a plain group chat (no forum topics)
+          # Add thread_id: <id> if the group has Forum Topics enabled
