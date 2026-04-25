@@ -21,37 +21,54 @@ The output of this session is shared with Copilot to build `scripts/higgsfield_a
 
 ---
 
-## Step 3 — Install Burp's CA certificate into Chrome
+## Step 2.5 — Install burp-awesome-tls (required for Higgsfield)
 
-Required to see HTTPS traffic. Do this once.
+Higgsfield uses Cloudflare Bot Management and DataDome, both of which detect Burp's Java TLS
+fingerprint and return 429/403 errors. This extension replaces Burp's TLS stack with a real
+browser fingerprint.
 
-1. Open Chrome (no proxy configured yet)
-2. Navigate to `http://127.0.0.1:8080` while Burp is running
-3. Click **CA Certificate** (top right) → saves `cacert.der`
-4. In Chrome, go to `chrome://settings/certificates`
-5. Click **Authorities** tab → **Import**
-6. Select the downloaded `cacert.der`
-7. Check ✅ **Trust this certificate for identifying websites** → OK
-8. Restart Chrome completely (close all windows, reopen)
+1. Download the latest `*-fat.jar` from the releases page of **sleeyax/burp-awesome-tls** on GitHub
+2. In Burp → **Extensions** → **Add**
+3. Set extension type to **Java** → select the downloaded `.jar` → **Next**
+4. A new **"Awesome TLS"** tab appears in Burp
+5. In that tab, set the fingerprint to **`firefox_147`**
+6. Leave all other settings at their defaults
 
 ---
 
-## Step 4 — Launch Chrome through Burp proxy
+## Step 3 — Install Burp's CA certificate into Firefox
 
-Close all Chrome windows, then open Run (Win+R) and paste:
+Required to see HTTPS traffic. Do this once.
 
-```
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --proxy-server="http://127.0.0.1:8080"
-```
+1. Open Firefox (no proxy configured yet)
+2. Navigate to `http://127.0.0.1:8080` while Burp is running
+3. Click **CA Certificate** (top right) → saves `cacert.der`
+4. In Firefox → **Settings** → **Privacy & Security** → scroll down to Certificates → **View Certificates**
+5. Click the **Authorities** tab → **Import**
+6. Select the downloaded `cacert.der`
+7. Check ✅ **Trust this certificate to identify websites** → OK
+8. Restart Firefox completely (close all windows, reopen)
 
-All Chrome traffic now routes through Burp.
+---
+
+## Step 4 — Configure Firefox to use the Burp proxy
+
+Firefox has built-in proxy settings — no command-line launch needed.
+
+1. In Firefox → **Settings** → search **"proxy"** → click **Settings…** under Network Settings
+2. Select **Manual proxy configuration**
+3. HTTP Proxy: `127.0.0.1` Port: `8080`
+4. Check ✅ **Also use this proxy for HTTPS**
+5. Click **OK**
+
+All Firefox traffic now routes through Burp.
 
 ---
 
 ## Step 5 — Verify the proxy is working
 
 1. In Burp → **Proxy → HTTP history**
-2. In Chrome, navigate to `https://example.com`
+2. In Firefox, navigate to `https://example.com`
 3. You should see full request/response entries (not just CONNECT tunnels)
 
 If you only see CONNECT entries: the CA cert was not installed correctly — redo Step 3.
@@ -69,10 +86,14 @@ If intercept is left ON, every request will pause and wait for manual forwarding
 
 ## Step 7 — Log in to Higgsfield
 
-1. In the proxied Chrome, go to `https://higgsfield.ai`
-2. Log in with your **email and password**
-3. Confirm you see the login request appear in Burp's HTTP history
-4. Confirm you are logged in and on the Higgsfield dashboard
+Higgsfield uses Clerk for authentication with a two-stage login flow.
+
+1. In the proxied Firefox, go to `https://higgsfield.ai`
+2. Enter your **email** and **password** → submit
+3. Clerk will send a **verification code** to your email — check your inbox
+4. Enter the verification code in the browser when prompted
+5. Confirm you are logged in and on the Higgsfield dashboard
+6. Confirm both the sign-in request and the verification code request appear in Burp's HTTP history
 
 ---
 
@@ -105,7 +126,7 @@ Do each step deliberately to ensure every API call is captured:
 
 ## Step 10 — Copy key requests as cURL (optional but helpful)
 
-For the ~8 most important requests (login, upload, generate, poll, assets, share link):
+For the ~8 most important requests (login, verification code, upload, generate, poll, assets, share link):
 
 1. Click the request in HTTP history
 2. In the Request panel → right-click → **Copy as curl command**
