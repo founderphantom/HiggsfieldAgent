@@ -8,95 +8,177 @@
 
 **Tech Stack:** Python 3.11+, httpx, python-dotenv, Pillow (already installed)
 
----
-
-## Phase 1: Reconnaissance
-
-### Task 1: Burp Suite capture session
-
-**Files:** None — user action only.
-
-> ⚠️ This task must be completed before any Phase 2 tasks begin. Do not proceed to Task 2 until this capture is done.
-
-- [ ] **Step 1: Install Burp Suite Community Edition**
-
-  Download from https://portswigger.net/burp/communitydownload. Install and launch.
-
-- [ ] **Step 2: Confirm proxy listener**
-
-  In Burp: Proxy → Proxy settings → confirm listener is `127.0.0.1:8080`.
-
-- [ ] **Step 3: Install Burp's CA certificate into Chrome**
-
-  With Burp running, open Chrome → navigate to `http://burp` → Download CA Certificate → save as `burp-cert.der`.
-  Chrome settings → Privacy and Security → Manage Certificates → Authorities tab → Import → select the `.der` file → trust for identifying websites.
-
-- [ ] **Step 4: Launch Chrome through Burp proxy**
-
-  Close all Chrome windows, then on Windows launch:
-  ```
-  "C:\Program Files\Google\Chrome\Application\chrome.exe" --proxy-server="http://127.0.0.1:8080" --ignore-certificate-errors
-  ```
-
-- [ ] **Step 5: Set Burp intercept OFF**
-
-  In Burp: Proxy → Intercept → click "Intercept is on" to toggle it OFF. Traffic flows through while being logged.
-
-- [ ] **Step 6: Log in to Higgsfield**
-
-  Navigate to `https://higgsfield.ai` in the proxied Chrome. Log in with your email and password. Confirm you see `higgsfield.ai` entries appearing in Burp's HTTP history.
-
-- [ ] **Step 7: Do one complete manual generation**
-
-  Navigate to `https://higgsfield.ai/mobile/image/soul-v2`. Perform the full flow:
-  - Upload an image
-  - Select FUFU / Soul 2.0 character
-  - Set aspect ratio, Batch 4, Quality 2K
-  - Click Generate
-  - Wait for the 4 images to complete (~8 min)
-  - Open each image's share link
-
-- [ ] **Step 8: Export HTTP history**
-
-  Burp: Proxy → HTTP history → filter Host column to `higgsfield.ai` and related subdomains (e.g., `api.higgsfield.ai`). Select all filtered rows → right-click → Save items → save as `higgsfield-capture.xml`.
-
-- [ ] **Step 9: Redact and share with Copilot**
-
-  **Before sharing**, redact all secret values:
-  - `Authorization: Bearer <REDACTED_JWT>`
-  - `Cookie: <REDACTED_COOKIES>`
-  - Any `x-api-key` / `x-auth-token` header values
-  - S3 presigned URL params (`X-Amz-Signature=<REDACTED>`)
-  - Your email address → `user@example.com`
-
-  Then log out of Higgsfield and log back in to invalidate the captured session.
-
-  Share the redacted XML (or ~8–12 key API calls as cURL commands) with Copilot in the chat.
+**Burp capture reference:** `docs/Full_gen.xml` — full session from login through generation and share link extraction.
 
 ---
 
-### Task 2: Endpoint map (Copilot produces after Task 1)
+## Phase 1: Reconnaissance ✅ COMPLETE
 
-**Files:** `docs/superpowers/plans/2026-04-24-higgsfield-api-rewrite-endpoints.md` (Copilot creates this)
+### Task 1: Burp Suite capture session ✅ DONE
 
-After receiving the Burp capture, Copilot produces an endpoint map containing:
-- Base URL
-- Auth endpoint (path, method, request body shape, JWT field in response)
-- Upload endpoint(s) (path, method — multipart POST or presigned URL two-step flow)
-- Generation endpoint (path, method, request body fields, job ID field in response)
-- Polling endpoint (path, method, status field name, completion value, error values)
-- Assets endpoint (path, response shape, asset ID/URL fields)
-- Share link endpoint (or confirmation that asset URL = share URL)
-- All required headers per request group
-- JWT lifetime (if readable from token expiry)
+**Notes from actual capture:**
+- Used **Firefox** (not Chrome) with proxy configured via Firefox Settings → Network Settings → Manual proxy → `127.0.0.1:8080`
+- Required **burp-awesome-tls** extension (`sleeyax/burp-awesome-tls`, `*-fat.jar`) with fingerprint set to `firefox_147` — Higgsfield uses Cloudflare Bot Management (`__cf_bm`) and DataDome which detect Burp's Java TLS fingerprint without this extension
+- burp-awesome-tls internal listener runs on `127.0.0.1:8887`; Firefox still points to `127.0.0.1:8080` (Burp's listener)
+- Login requires **email verification code (OTP)** sent to inbox after password entry — this is Clerk's mandatory second factor
+- Raw capture saved at `docs/Full_gen.xml`
 
-> ⚠️ **Phase 2 tasks use `[FILL FROM BURP]` markers** where endpoint-specific details are needed. Before starting Task 3, update the constants block in `higgsfield_api.py` using the endpoint map from this task.
+---
+
+### Task 2: Endpoint map ✅ DONE
+
+**All endpoints confirmed from `docs/Full_gen.xml` and supplementary captures.**
+
+#### Hosts
+
+| Host | Purpose |
+|---|---|
+| `clerk.higgsfield.ai` | Authentication (Clerk) |
+| `fnf.higgsfield.ai` | All API operations (upload, generate, poll, share) |
+| `d276s3zg8h21b2.cloudfront.net` | S3-backed presigned upload destination |
+| `d2ol7oe51mr4n9.cloudfront.net` | Permanent CDN for uploaded user media |
+
+#### Auth — 4-step Clerk flow
+
+```
+POST https://clerk.higgsfield.ai/v1/client/sign_ins?__clerk_api_version=2025-11-10&_clerk_js_version=5.125.10
+  Content-Type: application/x-www-form-urlencoded
+  Body: locale=en-US&identifier={email}&password={password}
+  → 200 {"response": {"id": "sia_{id}", "status": "needs_second_factor",
+                       "supported_second_factors": [{"strategy": "email_code",
+                                                     "email_address_id": "idn_{id}"}]}}
+
+POST https://clerk.higgsfield.ai/v1/client/sign_ins/{sia_id}/prepare_second_factor?...
+  Content-Type: application/x-www-form-urlencoded
+  Body: strategy=email_code&email_address_id={idn_id}
+  → 200  (triggers OTP email to user)
+
+POST https://clerk.higgsfield.ai/v1/client/sign_ins/{sia_id}/attempt_second_factor?...
+  Content-Type: application/x-www-form-urlencoded
+  Body: strategy=email_code&code={6_digit_otp}
+  → 200 {"response": {"status": "complete", "created_session_id": "sess_{id}"}}
+
+POST https://clerk.higgsfield.ai/v1/client/sessions/{session_id}/tokens?__clerk_api_version=2025-11-10&_clerk_js_version=5.125.10
+  Content-Type: application/x-www-form-urlencoded
+  Body: organization_id=
+  → 200 {"jwt": "{token}"}   ← short-lived (~60s), contains workspace_id and user_id in payload
+```
+
+**Session caching:** The underlying Clerk session (`sess_...`) is long-lived (days/weeks). The script must cache the `session_id` on disk so that on subsequent runs it only calls the `/tokens` endpoint to get a fresh JWT — skipping the full login and OTP flow. Only re-runs the full login when the cached session is expired or invalid.
+
+#### Image upload — 3-step presigned S3 flow
+
+```
+POST https://fnf.higgsfield.ai/media/batch
+  Authorization: Bearer {jwt}
+  Content-Type: application/json
+  Body: {"mimetypes": ["image/jpeg"], "source": "user_upload", "force_ip_check": false}
+  → 200 [{"id": "{media_id}",
+           "url": "https://d2ol7oe51mr4n9.cloudfront.net/{user_id}/{media_id}.jpg",
+           "upload_url": "https://d276s3zg8h21b2.cloudfront.net/...?X-Amz-Signature=...",
+           "content_type": "image/jpeg"}]
+
+PUT {upload_url}
+  Content-Type: image/jpeg
+  Body: <raw image bytes>
+  → 200  (direct to S3 — no Authorization header needed, URL is pre-signed)
+
+POST https://fnf.higgsfield.ai/media/{media_id}/upload
+  Authorization: Bearer {jwt}
+  Content-Type: application/json
+  Body: {"filename": "{original_filename}", "force_nsfw_check": true, "force_ip_check": false}
+  → 200 {"id": "{media_id}", "status": "uploaded", "ip_check_finished": null}
+```
+
+After step 3, use `media_id` and `url` (the permanent CDN URL) in the generation request.
+
+#### Generation trigger
+
+```
+POST https://fnf.higgsfield.ai/jobs/v2/text2image_soul_v2
+  Authorization: Bearer {jwt}
+  Content-Type: application/json
+  Body:
+  {
+    "params": {
+      "is_custom": false,
+      "model": "soul_v2",
+      "prompt": "",
+      "style_id": "3db34ab5-3439-4317-9e03-08dc30852e69",
+      "style_strength": 1,
+      "custom_reference_id": "9122abde-1e28-46b5-b3c5-712e003a80d7",
+      "custom_reference_strength": 1,
+      "aspect_ratio": "{aspect_ratio}",
+      "quality": "{quality}",
+      "enhance_prompt": false,
+      "width": {width},
+      "height": {height},
+      "batch_size": 4,
+      "medias": [{"role": "image", "data": {"id": "{media_id}", "type": "media_input", "url": "{media_cdn_url}"}}],
+      "seed": {random_int},
+      "use_unlim": false,
+      "use_green": true,
+      "use_refiner": false,
+      "negative_prompt": "",
+      "lora": null,
+      "chain_enhancer": null,
+      "model_version": "fast"
+    },
+    "use_unlim": false
+  }
+  → 200 {"id": "{workspace_id}", "job_sets": [{"id": "{job_set_id}",
+          "jobs": [{"id": "{job_id_1}"}, {"id": "{job_id_2}"},
+                   {"id": "{job_id_3}"}, {"id": "{job_id_4}"}]}]}
+```
+
+Extract job IDs from: `response["job_sets"][0]["jobs"][i]["id"]` — returns all 4 immediately.
+
+**Quality / dimension mapping** (captured values at `quality: "1080p"`, `aspect_ratio: "3:4"` → `width: 1536, height: 2048`). For "2K" the quality string is likely `"2K"` with correspondingly larger dimensions — verify if needed, otherwise use `"1080p"` as the default.
+
+#### Job status polling
+
+```
+GET https://fnf.higgsfield.ai/jobs/{job_id}/status
+  Authorization: Bearer {jwt}
+  → 200 {"id": "{job_id}", "status": "queued"|"in_progress"|"completed",
+          "job_set_type": "text2image_soul_v2"}
+```
+
+Poll each of the 4 job IDs. All 4 typically complete within the same window. Status sequence: `queued` → `in_progress` → `completed`.
+
+#### Share link extraction
+
+```
+PATCH https://fnf.higgsfield.ai/sharing-configs?asset_id={job_id}
+  Authorization: Bearer {jwt}
+  Content-Type: application/json
+  Body: {"link_access_level": "edit",
+         "redirect_url": "https://higgsfield.ai/share/{job_id}?utm_source=copylink&utm_medium=share&utm_campaign=asset_share&utm_content=image"}
+  → 200 {"share_url": "https://higg.ai/{code}", "share_code": "{code}", ...}
+```
+
+Note: `asset_id` in the query string equals the `job_id`. The share URL domain is `higg.ai` (short link), not `higgsfield.ai`.
+
+#### Fixed constants (this account)
+
+| Constant | Value |
+|---|---|
+| Fufu character ID | `9122abde-1e28-46b5-b3c5-712e003a80d7` |
+| General style ID | `3db34ab5-3439-4317-9e03-08dc30852e69` |
+| Workspace ID | `fc112abd-dc15-4aff-983d-9ec585ea4e40` (also in JWT payload as `workspace_id`) |
+| User ID | `user_37qkAfgwz3GdqEzgaYrhldNnp0T` |
+
+Fufu's ID can also be resolved dynamically: `GET /custom-references/v2?size=30&type=soul_2` returns `{"items": [{"id": "...", "name": "Fufu"}]}`.
+
+#### DataDome header note
+
+Requests to `fnf.higgsfield.ai` in the browser included `X-Datadome-Clientid`. In `httpx` (no browser JS), this header will be absent. The script should initially omit it and attempt requests — DataDome bot detection may or may not block non-browser clients on these endpoints. If `httpx` requests return 403, add `curl_cffi` with browser impersonation as a fallback (see Task 9 note).
 
 ---
 
 ## Phase 2: Implementation
 
-> **Prerequisite:** Task 2 endpoint map must be complete before starting any Phase 2 task. Update the `[FILL FROM BURP]` constants in Task 3 before implementing Tasks 4–9.
+> **Prerequisite:** Phase 1 is complete. All `[FILL FROM BURP]` markers below are already resolved — do not replace constants with placeholders.
 
 ---
 
@@ -124,10 +206,14 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   Requires env vars:
       HIGGSFIELD_EMAIL    — account email
       HIGGSFIELD_PASSWORD — account password
+
+  Session cache:
+      ~/.higgsfield_session  — stores Clerk session_id to skip OTP on repeat runs
   """
   import argparse
   import json
   import os
+  import random
   import sys
   import time
   from pathlib import Path
@@ -137,27 +223,48 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   from PIL import Image
 
   # ---------------------------------------------------------------------------
-  # API constants — fill in from endpoint map (Task 2) before implementing
+  # Hosts
   # ---------------------------------------------------------------------------
-  BASE_URL = "https://higgsfield.ai"           # [FILL FROM BURP]
-  LOGIN_PATH = "/api/auth/login"               # [FILL FROM BURP]
-  UPLOAD_PATH = "/api/upload"                  # [FILL FROM BURP]
-  GENERATE_PATH = "/api/generate"              # [FILL FROM BURP]
-  JOB_STATUS_PATH = "/api/jobs/{job_id}"       # [FILL FROM BURP]
-  ASSETS_PATH = "/api/assets"                  # [FILL FROM BURP]
-  SHARE_PATH = "/api/share/{asset_id}"         # [FILL FROM BURP] or None if asset URL = share URL
+  CLERK_BASE = "https://clerk.higgsfield.ai"
+  API_BASE   = "https://fnf.higgsfield.ai"
+  CLERK_PARAMS = "__clerk_api_version=2025-11-10&_clerk_js_version=5.125.10"
 
-  FUFU_CHARACTER_ID = "fufu"                   # [FILL FROM BURP] — actual character ID value
-  SOUL_V2_QUALITY = "2K"                       # [FILL FROM BURP] — actual quality param value
-  SOUL_V2_BATCH = 4                            # [FILL FROM BURP] — actual batch size param value
+  # ---------------------------------------------------------------------------
+  # Generation constants
+  # ---------------------------------------------------------------------------
+  FUFU_CHARACTER_ID = "9122abde-1e28-46b5-b3c5-712e003a80d7"
+  GENERAL_STYLE_ID  = "3db34ab5-3439-4317-9e03-08dc30852e69"
+  SOUL_V2_QUALITY   = "1080p"   # captured value; use "2K" if higher quality needed
+  SOUL_V2_BATCH     = 4
 
-  GENERATION_POLL_INTERVAL = 15               # seconds between status checks
-  GENERATION_TIMEOUT = 900                    # 15 minutes max
-
-  COMMON_HEADERS = {
-      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept": "application/json",
+  # Quality → (width, height) for 3:4 aspect ratio
+  QUALITY_DIMS = {
+      "1080p": (1536, 2048),
+      "2K":    (2048, 2732),
   }
+
+  # ---------------------------------------------------------------------------
+  # Polling
+  # ---------------------------------------------------------------------------
+  POLL_INTERVAL = 15   # seconds between status checks
+  POLL_TIMEOUT  = 900  # 15 minutes max
+
+  # ---------------------------------------------------------------------------
+  # Session cache path
+  # ---------------------------------------------------------------------------
+  SESSION_CACHE = Path.home() / ".higgsfield_session"
+
+  # ---------------------------------------------------------------------------
+  # Common headers for fnf.higgsfield.ai
+  # ---------------------------------------------------------------------------
+  def _api_headers(jwt: str) -> dict:
+      return {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+          "Accept": "*/*",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Authorization": f"Bearer {jwt}",
+          "Origin": "https://higgsfield.ai",
+      }
   ```
 
 - [ ] **Step 2: Create empty test file**
@@ -179,88 +286,157 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
 
   ```bash
   git add scripts/higgsfield_api.py tests/test_higgsfield_api.py
-  git commit -m "feat: scaffold higgsfield_api.py with constants block"
+  git commit -m "feat: scaffold higgsfield_api.py with confirmed API constants"
   ```
 
 ---
 
 ### Task 4: Login module
 
-> Fill in `LOGIN_PATH`, request body shape, and JWT response field from endpoint map before coding.
+**The login flow is a 4-step Clerk process. Sessions are cached to avoid repeated OTP prompts.**
 
 **Files:**
 - Modify: `scripts/higgsfield_api.py`
 - Modify: `tests/test_higgsfield_api.py`
 
-- [ ] **Step 1: Write failing tests for login()**
+- [ ] **Step 1: Write failing tests for login functions**
 
   Add to `tests/test_higgsfield_api.py`:
 
   ```python
-  def test_login_returns_jwt_on_success():
+  def test_get_jwt_from_cached_session():
       mock_resp = MagicMock()
       mock_resp.status_code = 200
-      mock_resp.json.return_value = {"token": "test.jwt.token"}  # [adjust field name from endpoint map]
+      mock_resp.json.return_value = {"jwt": "test.jwt.token"}
       with patch("httpx.Client.post", return_value=mock_resp):
-          from higgsfield_api import login
-          token = login("user@example.com", "password123")
+          from higgsfield_api import _get_jwt_for_session
+          token = _get_jwt_for_session("sess_abc123")
       assert token == "test.jwt.token"
 
 
-  def test_login_raises_on_bad_credentials():
-      mock_resp = MagicMock()
-      mock_resp.status_code = 401
-      mock_resp.text = "Unauthorized"
-      with patch("httpx.Client.post", return_value=mock_resp):
-          from higgsfield_api import login
-          with pytest.raises(RuntimeError, match="Login failed"):
-              login("user@example.com", "wrongpassword")
+  def test_login_full_flow_raises_without_otp_input():
+      sign_in_resp = MagicMock(status_code=200)
+      sign_in_resp.json.return_value = {
+          "response": {
+              "id": "sia_test",
+              "status": "needs_second_factor",
+              "supported_second_factors": [
+                  {"strategy": "email_code", "email_address_id": "idn_test"}
+              ],
+          }
+      }
+      with patch("httpx.Client.post", return_value=sign_in_resp):
+          with patch("builtins.input", return_value="123456"):
+              attempt_resp = MagicMock(status_code=200)
+              attempt_resp.json.return_value = {
+                  "response": {"status": "complete", "created_session_id": "sess_new"}
+              }
+              jwt_resp = MagicMock(status_code=200)
+              jwt_resp.json.return_value = {"jwt": "new.jwt.token"}
+              with patch("httpx.Client.post", side_effect=[
+                  sign_in_resp,
+                  MagicMock(status_code=200),  # prepare_second_factor
+                  attempt_resp,
+                  jwt_resp,
+              ]):
+                  from higgsfield_api import login_full
+                  token = login_full("user@example.com", "password123")
+      assert token == "new.jwt.token"
   ```
 
 - [ ] **Step 2: Run tests to confirm they fail**
 
   ```bash
-  pytest tests/test_higgsfield_api.py::test_login_returns_jwt_on_success tests/test_higgsfield_api.py::test_login_raises_on_bad_credentials -v
+  pytest tests/test_higgsfield_api.py::test_get_jwt_from_cached_session tests/test_higgsfield_api.py::test_login_full_flow_raises_without_otp_input -v
   ```
-  Expected: `ImportError` or `FAILED`
 
-- [ ] **Step 3: Implement login()**
+- [ ] **Step 3: Implement login functions**
 
   Add to `scripts/higgsfield_api.py`:
 
   ```python
-  def login(email: str, password: str) -> str:
-      """POST credentials, return JWT. Raises RuntimeError on failure."""
-      with httpx.Client(headers=COMMON_HEADERS) as client:
-          resp = client.post(
-              BASE_URL + LOGIN_PATH,
-              json={"email": email, "password": password},  # [FILL FROM BURP — adjust field names]
-          )
+  def _get_jwt_for_session(session_id: str) -> str:
+      """Exchange a live Clerk session ID for a fresh short-lived JWT."""
+      url = f"{CLERK_BASE}/v1/client/sessions/{session_id}/tokens?{CLERK_PARAMS}"
+      with httpx.Client() as client:
+          resp = client.post(url, data={"organization_id": ""})
       if resp.status_code != 200:
-          raise RuntimeError(f"Login failed ({resp.status_code}): {resp.text[:200]}")
-      data = resp.json()
-      return data["token"]  # [FILL FROM BURP — adjust JWT field name]
+          raise RuntimeError(f"Token refresh failed ({resp.status_code})")
+      return resp.json()["jwt"]
+
+
+  def login_full(email: str, password: str) -> str:
+      """Full Clerk login: password + OTP → session → JWT.
+
+      Prompts stdin for the 6-digit OTP code sent to the account email.
+      Caches the new session ID to SESSION_CACHE for future runs.
+      """
+      base_url = f"{CLERK_BASE}/v1/client/sign_ins?{CLERK_PARAMS}"
+
+      with httpx.Client() as client:
+          # Step 1: password
+          r = client.post(base_url, data={
+              "locale": "en-US",
+              "identifier": email,
+              "password": password,
+          })
+          if r.status_code != 200:
+              raise RuntimeError(f"Login failed ({r.status_code}): {r.text[:200]}")
+          resp_data = r.json()["response"]
+          sia_id = resp_data["id"]
+          idn_id = resp_data["supported_second_factors"][0]["email_address_id"]
+
+          # Step 2: trigger OTP email
+          client.post(
+              f"{CLERK_BASE}/v1/client/sign_ins/{sia_id}/prepare_second_factor?{CLERK_PARAMS}",
+              data={"strategy": "email_code", "email_address_id": idn_id},
+          )
+
+          # Step 3: submit OTP (prompts user)
+          code = input("Enter the verification code sent to your email: ").strip()
+          r2 = client.post(
+              f"{CLERK_BASE}/v1/client/sign_ins/{sia_id}/attempt_second_factor?{CLERK_PARAMS}",
+              data={"strategy": "email_code", "code": code},
+          )
+          if r2.status_code != 200 or r2.json()["response"]["status"] != "complete":
+              raise RuntimeError(f"OTP verification failed ({r2.status_code}): {r2.text[:200]}")
+          session_id = r2.json()["response"]["created_session_id"]
+
+      # Cache session for future runs
+      SESSION_CACHE.write_text(session_id)
+
+      return _get_jwt_for_session(session_id)
+
+
+  def get_jwt(email: str, password: str) -> str:
+      """Return a fresh JWT. Uses cached session if available, otherwise full login."""
+      if SESSION_CACHE.exists():
+          session_id = SESSION_CACHE.read_text().strip()
+          try:
+              return _get_jwt_for_session(session_id)
+          except RuntimeError:
+              SESSION_CACHE.unlink(missing_ok=True)
+      return login_full(email, password)
   ```
 
 - [ ] **Step 4: Run tests to confirm they pass**
 
   ```bash
-  pytest tests/test_higgsfield_api.py::test_login_returns_jwt_on_success tests/test_higgsfield_api.py::test_login_raises_on_bad_credentials -v
+  pytest tests/test_higgsfield_api.py::test_get_jwt_from_cached_session -v
   ```
-  Expected: `PASSED`
 
 - [ ] **Step 5: Commit**
 
   ```bash
   git add scripts/higgsfield_api.py tests/test_higgsfield_api.py
-  git commit -m "feat: add login() with email/password → JWT"
+  git commit -m "feat: add Clerk login — password + OTP + session cache"
   ```
 
 ---
 
 ### Task 5: Image upload module
 
-> Fill in upload endpoint details from endpoint map (single-step multipart POST, or two-step presigned S3 URL flow).
+**Three-step presigned S3 flow: create slot → PUT to S3 → confirm.**
 
 **Files:**
 - Modify: `scripts/higgsfield_api.py`
@@ -271,70 +447,102 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   Add to `tests/test_higgsfield_api.py`:
 
   ```python
-  def test_upload_image_returns_asset_key(tmp_path):
-      img_path = tmp_path / "test.png"
+  def test_upload_image_returns_media_id_and_url(tmp_path):
+      img_path = tmp_path / "test.jpg"
       from PIL import Image as PILImage
       PILImage.new("RGB", (10, 10), color="red").save(img_path)
 
-      mock_resp = MagicMock()
-      mock_resp.status_code = 200
-      mock_resp.json.return_value = {"key": "uploads/abc123.png"}  # [adjust from endpoint map]
+      batch_resp = MagicMock(status_code=200)
+      batch_resp.json.return_value = [{
+          "id": "media-abc123",
+          "url": "https://d2ol7oe51mr4n9.cloudfront.net/user_x/media-abc123.jpg",
+          "upload_url": "https://d276s3zg8h21b2.cloudfront.net/user_x/media-abc123.jpg?X-Amz-Signature=xyz",
+          "content_type": "image/jpeg",
+      }]
+      put_resp = MagicMock(status_code=200)
+      confirm_resp = MagicMock(status_code=200)
+      confirm_resp.json.return_value = {"id": "media-abc123", "status": "uploaded"}
 
-      with patch("httpx.Client.post", return_value=mock_resp):
-          from higgsfield_api import upload_image
-          key = upload_image("test.jwt.token", str(img_path))
-      assert key == "uploads/abc123.png"
+      with patch("httpx.Client.post", side_effect=[batch_resp, confirm_resp]):
+          with patch("httpx.Client.put", return_value=put_resp):
+              from higgsfield_api import upload_image
+              media_id, cdn_url = upload_image("test.jwt", str(img_path))
+
+      assert media_id == "media-abc123"
+      assert "cloudfront" in cdn_url
   ```
 
 - [ ] **Step 2: Run test to confirm it fails**
 
   ```bash
-  pytest tests/test_higgsfield_api.py::test_upload_image_returns_asset_key -v
+  pytest tests/test_higgsfield_api.py::test_upload_image_returns_media_id_and_url -v
   ```
-  Expected: `FAILED`
 
 - [ ] **Step 3: Implement upload_image()**
 
   Add to `scripts/higgsfield_api.py`:
 
   ```python
-  def upload_image(jwt: str, image_path: str) -> str:
-      """Upload image file, return the asset key/ID for use in generation.
+  def upload_image(jwt: str, image_path: str) -> tuple[str, str]:
+      """Upload image to Higgsfield. Returns (media_id, cdn_url).
 
-      [FILL FROM BURP]: If Higgsfield uses a presigned S3 URL, this will be two calls:
-          1. POST to get presigned URL → 2. PUT file to S3 URL → return the key.
+      Flow:
+        1. POST /media/batch → get media_id, cdn_url, presigned upload_url
+        2. PUT image bytes to presigned S3 upload_url
+        3. POST /media/{media_id}/upload to confirm
       """
-      headers = {**COMMON_HEADERS, "Authorization": f"Bearer {jwt}"}
-      with open(image_path, "rb") as f:
-          with httpx.Client(headers=headers) as client:
-              resp = client.post(
-                  BASE_URL + UPLOAD_PATH,
-                  files={"file": (Path(image_path).name, f, "image/jpeg")},  # [FILL FROM BURP — multipart field name]
-              )
-      if resp.status_code not in (200, 201):
-          raise RuntimeError(f"Upload failed ({resp.status_code}): {resp.text[:200]}")
-      return resp.json()["key"]  # [FILL FROM BURP — adjust field name]
+      headers = _api_headers(jwt)
+      img_path = Path(image_path)
+
+      with httpx.Client(headers=headers) as client:
+          # Step 1: reserve upload slot
+          r = client.post(
+              f"{API_BASE}/media/batch",
+              json={"mimetypes": ["image/jpeg"], "source": "user_upload", "force_ip_check": False},
+          )
+          if r.status_code != 200:
+              raise RuntimeError(f"Media batch failed ({r.status_code}): {r.text[:200]}")
+          slot = r.json()[0]
+          media_id  = slot["id"]
+          cdn_url   = slot["url"]
+          upload_url = slot["upload_url"]
+
+          # Step 2: PUT raw bytes to presigned S3 URL (no auth header)
+          with open(img_path, "rb") as f:
+              image_bytes = f.read()
+          put_resp = client.put(upload_url, content=image_bytes, headers={"Content-Type": "image/jpeg"})
+          if put_resp.status_code not in (200, 204):
+              raise RuntimeError(f"S3 upload failed ({put_resp.status_code})")
+
+          # Step 3: confirm upload
+          r2 = client.post(
+              f"{API_BASE}/media/{media_id}/upload",
+              json={"filename": img_path.name, "force_nsfw_check": True, "force_ip_check": False},
+          )
+          if r2.status_code != 200:
+              raise RuntimeError(f"Upload confirm failed ({r2.status_code}): {r2.text[:200]}")
+
+      return media_id, cdn_url
   ```
 
 - [ ] **Step 4: Run test to confirm it passes**
 
   ```bash
-  pytest tests/test_higgsfield_api.py::test_upload_image_returns_asset_key -v
+  pytest tests/test_higgsfield_api.py::test_upload_image_returns_media_id_and_url -v
   ```
-  Expected: `PASSED`
 
 - [ ] **Step 5: Commit**
 
   ```bash
   git add scripts/higgsfield_api.py tests/test_higgsfield_api.py
-  git commit -m "feat: add upload_image() — multipart POST, returns asset key"
+  git commit -m "feat: add upload_image() — 3-step presigned S3 flow"
   ```
 
 ---
 
 ### Task 6: Generation trigger module
 
-> Fill in generate endpoint path, request body field names, and job ID field from endpoint map.
+**Returns a list of 4 job IDs immediately.**
 
 **Files:**
 - Modify: `scripts/higgsfield_api.py`
@@ -345,173 +553,207 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   Add to `tests/test_higgsfield_api.py`:
 
   ```python
-  def test_start_generation_returns_job_id():
-      mock_resp = MagicMock()
-      mock_resp.status_code = 200
-      mock_resp.json.return_value = {"jobId": "job_xyz789"}  # [adjust from endpoint map]
-
+  def test_start_generation_returns_four_job_ids():
+      mock_resp = MagicMock(status_code=200)
+      mock_resp.json.return_value = {
+          "id": "workspace-id",
+          "job_sets": [{"id": "set-id", "jobs": [
+              {"id": "job-1"}, {"id": "job-2"}, {"id": "job-3"}, {"id": "job-4"},
+          ]}],
+      }
       with patch("httpx.Client.post", return_value=mock_resp):
           from higgsfield_api import start_generation
-          job_id = start_generation("test.jwt.token", "uploads/abc123.png", "16:9")
-      assert job_id == "job_xyz789"
+          job_ids = start_generation("test.jwt", "media-abc", "https://cdn.example.com/media-abc.jpg", "3:4")
+      assert job_ids == ["job-1", "job-2", "job-3", "job-4"]
   ```
 
 - [ ] **Step 2: Run test to confirm it fails**
 
   ```bash
-  pytest tests/test_higgsfield_api.py::test_start_generation_returns_job_id -v
+  pytest tests/test_higgsfield_api.py::test_start_generation_returns_four_job_ids -v
   ```
-  Expected: `FAILED`
 
 - [ ] **Step 3: Implement start_generation()**
 
   Add to `scripts/higgsfield_api.py`:
 
   ```python
-  def start_generation(jwt: str, asset_key: str, aspect_ratio: str) -> str:
-      """Trigger FUFU generation job. Returns job ID string."""
-      headers = {**COMMON_HEADERS, "Authorization": f"Bearer {jwt}"}
+  def start_generation(jwt: str, media_id: str, media_url: str, aspect_ratio: str) -> list[str]:
+      """Trigger Soul V2 FUFU generation. Returns list of 4 job IDs."""
+      width, height = QUALITY_DIMS.get(SOUL_V2_QUALITY, (1536, 2048))
       payload = {
-          "characterId": FUFU_CHARACTER_ID,   # [FILL FROM BURP — adjust field name]
-          "imageKey": asset_key,              # [FILL FROM BURP — adjust field name]
-          "aspectRatio": aspect_ratio,        # [FILL FROM BURP — adjust field name and value format]
-          "batchSize": SOUL_V2_BATCH,         # [FILL FROM BURP — adjust field name]
-          "quality": SOUL_V2_QUALITY,         # [FILL FROM BURP — adjust field name]
+          "params": {
+              "is_custom": False,
+              "model": "soul_v2",
+              "prompt": "",
+              "style_id": GENERAL_STYLE_ID,
+              "style_strength": 1,
+              "custom_reference_id": FUFU_CHARACTER_ID,
+              "custom_reference_strength": 1,
+              "aspect_ratio": aspect_ratio,
+              "quality": SOUL_V2_QUALITY,
+              "enhance_prompt": False,
+              "width": width,
+              "height": height,
+              "batch_size": SOUL_V2_BATCH,
+              "medias": [{"role": "image", "data": {
+                  "id": media_id,
+                  "type": "media_input",
+                  "url": media_url,
+              }}],
+              "seed": random.randint(1, 999999),
+              "use_unlim": False,
+              "use_green": True,
+              "use_refiner": False,
+              "negative_prompt": "",
+              "lora": None,
+              "chain_enhancer": None,
+              "model_version": "fast",
+          },
+          "use_unlim": False,
       }
-      with httpx.Client(headers=headers) as client:
-          resp = client.post(BASE_URL + GENERATE_PATH, json=payload)
-      if resp.status_code not in (200, 201, 202):
+      with httpx.Client(headers=_api_headers(jwt)) as client:
+          resp = client.post(f"{API_BASE}/jobs/v2/text2image_soul_v2", json=payload)
+      if resp.status_code != 200:
           raise RuntimeError(f"Generation failed ({resp.status_code}): {resp.text[:200]}")
-      return resp.json()["jobId"]  # [FILL FROM BURP — adjust field name]
+      jobs = resp.json()["job_sets"][0]["jobs"]
+      return [j["id"] for j in jobs]
   ```
 
 - [ ] **Step 4: Run test to confirm it passes**
 
   ```bash
-  pytest tests/test_higgsfield_api.py::test_start_generation_returns_job_id -v
+  pytest tests/test_higgsfield_api.py::test_start_generation_returns_four_job_ids -v
   ```
-  Expected: `PASSED`
 
 - [ ] **Step 5: Commit**
 
   ```bash
   git add scripts/higgsfield_api.py tests/test_higgsfield_api.py
-  git commit -m "feat: add start_generation() — triggers FUFU Soul v2 job"
+  git commit -m "feat: add start_generation() — Soul V2 FUFU, returns 4 job IDs"
   ```
 
 ---
 
 ### Task 7: Polling + share links module
 
-> Fill in job status endpoint, status field values, asset ID fields, and share link endpoint from endpoint map.
+**Polls all 4 job IDs in parallel. Share links use PATCH on sharing-configs (not GET).**
 
 **Files:**
 - Modify: `scripts/higgsfield_api.py`
 - Modify: `tests/test_higgsfield_api.py`
 
-- [ ] **Step 1: Write failing tests for poll_generation() and get_share_links()**
+- [ ] **Step 1: Write failing tests for poll_jobs() and get_share_links()**
 
   Add to `tests/test_higgsfield_api.py`:
 
   ```python
-  def test_poll_generation_returns_asset_ids_when_complete():
-      responses = [
-          MagicMock(status_code=200, json=lambda: {"status": "processing", "assets": []}),
-          MagicMock(status_code=200, json=lambda: {"status": "complete", "assets": ["id1", "id2", "id3", "id4"]}),
-      ]
-      with patch("httpx.Client.get", side_effect=responses):
+  def test_poll_jobs_returns_when_all_complete():
+      in_progress = MagicMock(status_code=200)
+      in_progress.json.return_value = {"status": "in_progress"}
+      completed = MagicMock(status_code=200)
+      completed.json.return_value = {"status": "completed"}
+
+      # First poll: all in_progress. Second poll: all completed.
+      with patch("httpx.Client.get", side_effect=[
+          in_progress, in_progress, in_progress, in_progress,
+          completed,    completed,    completed,    completed,
+      ]):
           with patch("time.sleep"):
-              from higgsfield_api import poll_generation
-              asset_ids = poll_generation("test.jwt.token", "job_xyz789")
-      assert asset_ids == ["id1", "id2", "id3", "id4"]
+              from higgsfield_api import poll_jobs
+              poll_jobs("test.jwt", ["j1", "j2", "j3", "j4"])
 
 
-  def test_poll_generation_raises_on_timeout():
-      always_processing = MagicMock(
-          status_code=200,
-          json=lambda: {"status": "processing", "assets": []}
-      )
-      with patch("httpx.Client.get", return_value=always_processing):
+  def test_poll_jobs_raises_on_timeout():
+      always_running = MagicMock(status_code=200)
+      always_running.json.return_value = {"status": "in_progress"}
+      with patch("httpx.Client.get", return_value=always_running):
           with patch("time.sleep"):
-              from higgsfield_api import poll_generation
+              from higgsfield_api import poll_jobs
               with pytest.raises(RuntimeError, match="timed out"):
-                  poll_generation("test.jwt.token", "job_xyz789", timeout=-1)
+                  poll_jobs("test.jwt", ["j1"], timeout=-1)
 
 
-  def test_get_share_links_returns_four_urls():
-      mock_resp = MagicMock()
-      mock_resp.status_code = 200
-      mock_resp.json.return_value = {"shareUrl": "https://higgsfield.ai/share/abc"}
-
-      with patch("httpx.Client.get", return_value=mock_resp):
+  def test_get_share_links_returns_four_higg_ai_urls():
+      mock_resp = MagicMock(status_code=200)
+      mock_resp.json.return_value = {"share_url": "https://higg.ai/AbCdEfGhIjK"}
+      with patch("httpx.Client.patch", return_value=mock_resp):
           from higgsfield_api import get_share_links
-          links = get_share_links("test.jwt.token", ["id1", "id2", "id3", "id4"])
-
-      assert len(links) == 4
-      assert all(link.startswith("https://") for link in links)
+          links = get_share_links("test.jwt", ["j1", "j2", "j3", "j4"])
+      assert links == ["https://higg.ai/AbCdEfGhIjK"] * 4
   ```
 
 - [ ] **Step 2: Run tests to confirm they fail**
 
   ```bash
-  pytest tests/test_higgsfield_api.py::test_poll_generation_returns_asset_ids_when_complete tests/test_higgsfield_api.py::test_poll_generation_raises_on_timeout tests/test_higgsfield_api.py::test_get_share_links_returns_four_urls -v
+  pytest tests/test_higgsfield_api.py::test_poll_jobs_returns_when_all_complete tests/test_higgsfield_api.py::test_poll_jobs_raises_on_timeout tests/test_higgsfield_api.py::test_get_share_links_returns_four_higg_ai_urls -v
   ```
-  Expected: `FAILED`
 
-- [ ] **Step 3: Implement poll_generation() and get_share_links()**
+- [ ] **Step 3: Implement poll_jobs() and get_share_links()**
 
   Add to `scripts/higgsfield_api.py`:
 
   ```python
-  def poll_generation(jwt: str, job_id: str, timeout: int = GENERATION_TIMEOUT) -> list[str]:
-      """Poll job status until complete. Returns list of asset IDs. Raises RuntimeError on timeout."""
-      headers = {**COMMON_HEADERS, "Authorization": f"Bearer {jwt}"}
+  def poll_jobs(jwt: str, job_ids: list[str], timeout: int = POLL_TIMEOUT) -> None:
+      """Poll all job IDs until every one reaches 'completed'. Raises on timeout."""
+      headers = _api_headers(jwt)
       deadline = time.time() + timeout
-      url = BASE_URL + JOB_STATUS_PATH.format(job_id=job_id)  # [FILL FROM BURP — adjust URL pattern]
-      while time.time() < deadline:
+      pending = set(job_ids)
+
+      while pending:
+          if time.time() > deadline:
+              raise RuntimeError(f"Generation timed out after {timeout}s ({len(pending)} jobs still pending)")
+          still_pending = set()
           with httpx.Client(headers=headers) as client:
-              resp = client.get(url)
-          if resp.status_code != 200:
-              raise RuntimeError(f"Poll failed ({resp.status_code}): {resp.text[:200]}")
-          data = resp.json()
-          status = data.get("status", "")       # [FILL FROM BURP — adjust status field name]
-          if status == "complete":              # [FILL FROM BURP — adjust completion value]
-              return data["assets"]             # [FILL FROM BURP — adjust asset IDs field]
-          if status in ("failed", "error"):     # [FILL FROM BURP — adjust error status values]
-              raise RuntimeError(f"Generation failed: {data}")
-          time.sleep(GENERATION_POLL_INTERVAL)
-      raise RuntimeError(f"Generation timed out after {timeout}s")
+              for job_id in pending:
+                  resp = client.get(f"{API_BASE}/jobs/{job_id}/status")
+                  if resp.status_code != 200:
+                      raise RuntimeError(f"Poll failed for {job_id} ({resp.status_code})")
+                  status = resp.json().get("status", "")
+                  if status == "completed":
+                      continue
+                  if status in ("failed", "error"):
+                      raise RuntimeError(f"Job {job_id} failed: {resp.json()}")
+                  still_pending.add(job_id)
+          pending = still_pending
+          if pending:
+              time.sleep(POLL_INTERVAL)
 
 
-  def get_share_links(jwt: str, asset_ids: list[str]) -> list[str]:
-      """Fetch share URL for each asset. Returns list of 4 share URLs.
-
-      [FILL FROM BURP]: If the asset URL from poll response IS the share URL, return asset_ids directly.
-      """
-      headers = {**COMMON_HEADERS, "Authorization": f"Bearer {jwt}"}
+  def get_share_links(jwt: str, job_ids: list[str]) -> list[str]:
+      """PATCH sharing-configs for each job to enable sharing. Returns list of higg.ai URLs."""
+      headers = _api_headers(jwt)
       links = []
-      for asset_id in asset_ids:
-          url = BASE_URL + SHARE_PATH.format(asset_id=asset_id)  # [FILL FROM BURP]
-          with httpx.Client(headers=headers) as client:
-              resp = client.get(url)
-          if resp.status_code != 200:
-              raise RuntimeError(f"Share link failed for {asset_id} ({resp.status_code})")
-          links.append(resp.json()["shareUrl"])  # [FILL FROM BURP — adjust field name]
+      with httpx.Client(headers=headers) as client:
+          for job_id in job_ids:
+              resp = client.patch(
+                  f"{API_BASE}/sharing-configs?asset_id={job_id}",
+                  json={
+                      "link_access_level": "edit",
+                      "redirect_url": (
+                          f"https://higgsfield.ai/share/{job_id}"
+                          "?utm_source=copylink&utm_medium=share"
+                          "&utm_campaign=asset_share&utm_content=image"
+                      ),
+                  },
+              )
+              if resp.status_code != 200:
+                  raise RuntimeError(f"Share link failed for {job_id} ({resp.status_code})")
+              links.append(resp.json()["share_url"])
       return links
   ```
 
 - [ ] **Step 4: Run tests to confirm they pass**
 
   ```bash
-  pytest tests/test_higgsfield_api.py::test_poll_generation_returns_asset_ids_when_complete tests/test_higgsfield_api.py::test_poll_generation_raises_on_timeout tests/test_higgsfield_api.py::test_get_share_links_returns_four_urls -v
+  pytest tests/test_higgsfield_api.py::test_poll_jobs_returns_when_all_complete tests/test_higgsfield_api.py::test_poll_jobs_raises_on_timeout tests/test_higgsfield_api.py::test_get_share_links_returns_four_higg_ai_urls -v
   ```
-  Expected: `PASSED`
 
 - [ ] **Step 5: Commit**
 
   ```bash
   git add scripts/higgsfield_api.py tests/test_higgsfield_api.py
-  git commit -m "feat: add poll_generation() and get_share_links()"
+  git commit -m "feat: add poll_jobs() and get_share_links() — PATCH sharing-configs"
   ```
 
 ---
@@ -528,14 +770,14 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
 
   ```python
   def test_run_generation_returns_success(tmp_path):
-      img_path = tmp_path / "test.png"
+      img_path = tmp_path / "test.jpg"
       from PIL import Image as PILImage
-      PILImage.new("RGB", (1920, 1080), color="blue").save(img_path)
+      PILImage.new("RGB", (1080, 1440)).save(img_path)
 
-      with patch("higgsfield_api.login", return_value="jwt_tok"), \
-           patch("higgsfield_api.upload_image", return_value="uploads/x.png"), \
-           patch("higgsfield_api.start_generation", return_value="job_123"), \
-           patch("higgsfield_api.poll_generation", return_value=["a1", "a2", "a3", "a4"]), \
+      with patch("higgsfield_api.get_jwt", return_value="jwt_tok"), \
+           patch("higgsfield_api.upload_image", return_value=("media-id", "https://cdn.example.com/m.jpg")), \
+           patch("higgsfield_api.start_generation", return_value=["j1", "j2", "j3", "j4"]), \
+           patch("higgsfield_api.poll_jobs"), \
            patch("higgsfield_api.get_share_links", return_value=["u1", "u2", "u3", "u4"]), \
            patch.dict("os.environ", {"HIGGSFIELD_EMAIL": "user@example.com", "HIGGSFIELD_PASSWORD": "pw"}):
           from higgsfield_api import run_generation
@@ -545,11 +787,11 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
 
 
   def test_run_generation_returns_error_on_exception(tmp_path):
-      img_path = tmp_path / "test.png"
+      img_path = tmp_path / "test.jpg"
       from PIL import Image as PILImage
       PILImage.new("RGB", (100, 100)).save(img_path)
 
-      with patch("higgsfield_api.login", side_effect=RuntimeError("Login failed (401): bad creds")), \
+      with patch("higgsfield_api.get_jwt", side_effect=RuntimeError("Login failed (401)")), \
            patch.dict("os.environ", {"HIGGSFIELD_EMAIL": "u@e.com", "HIGGSFIELD_PASSWORD": "pw"}):
           from higgsfield_api import run_generation
           result = run_generation(str(img_path))
@@ -559,7 +801,7 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
 
 
   def test_run_generation_errors_without_credentials(tmp_path):
-      img_path = tmp_path / "test.png"
+      img_path = tmp_path / "test.jpg"
       from PIL import Image as PILImage
       PILImage.new("RGB", (100, 100)).save(img_path)
 
@@ -576,34 +818,29 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   ```bash
   pytest tests/test_higgsfield_api.py::test_run_generation_returns_success tests/test_higgsfield_api.py::test_run_generation_returns_error_on_exception tests/test_higgsfield_api.py::test_run_generation_errors_without_credentials -v
   ```
-  Expected: `FAILED`
 
-- [ ] **Step 3: Implement get_aspect_ratio_for_image(), run_generation(), and main()**
+- [ ] **Step 3: Implement run_generation() and main()**
 
   Add to `scripts/higgsfield_api.py`:
 
   ```python
-  def get_aspect_ratio_for_image(image_path: str) -> str:
-      with Image.open(image_path) as img:
-          width, height = img.size
-      from get_aspect_ratio import closest_ratio
-      return closest_ratio(width, height)
-
-
   def run_generation(image_path: str) -> dict:
-      """Full pipeline: login → upload → generate → poll → share links."""
+      """Full pipeline: auth → upload → generate → poll → share links."""
       load_dotenv()
-      email = os.environ.get("HIGGSFIELD_EMAIL", "")
+      email    = os.environ.get("HIGGSFIELD_EMAIL", "")
       password = os.environ.get("HIGGSFIELD_PASSWORD", "")
       if not email or not password:
-          return {"status": "error", "message": "HIGGSFIELD_EMAIL and HIGGSFIELD_PASSWORD must be set"}
+          return {"status": "error", "message": "HIGGSFIELD_EMAIL and HIGGSFIELD_PASSWORD must be set in .env"}
       try:
-          aspect_ratio = get_aspect_ratio_for_image(image_path)
-          jwt = login(email, password)
-          asset_key = upload_image(jwt, image_path)
-          job_id = start_generation(jwt, asset_key, aspect_ratio)
-          asset_ids = poll_generation(jwt, job_id)
-          links = get_share_links(jwt, asset_ids)
+          from get_aspect_ratio import closest_ratio
+          with Image.open(image_path) as img:
+              aspect_ratio = closest_ratio(*img.size)
+
+          jwt                  = get_jwt(email, password)
+          media_id, media_url  = upload_image(jwt, image_path)
+          job_ids              = start_generation(jwt, media_id, media_url, aspect_ratio)
+          poll_jobs(jwt, job_ids)
+          links                = get_share_links(jwt, job_ids)
           return {"status": "success", "links": links}
       except Exception as e:
           return {"status": "error", "message": str(e)}
@@ -654,6 +891,8 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
 - Delete: `scripts/generate_fufu.py`
 - Delete: `tests/test_generate_fufu.py`
 
+> **DataDome note:** If any `fnf.higgsfield.ai` endpoint returns 403 after implementation (DataDome blocking non-browser clients), add `curl_cffi>=0.7.0` to requirements and replace `httpx.Client` with `curl_cffi.requests.Session(impersonate="firefox120")` in `_api_headers` callers.
+
 - [ ] **Step 1: Update requirements.txt**
 
   Replace the entire contents of `requirements.txt` with:
@@ -664,14 +903,11 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   pytest>=8.0.0
   ```
 
-  > If Higgsfield returns 403 on any endpoint (TLS fingerprinting), add `curl_cffi>=0.7.0` to requirements and swap `httpx.Client` for `curl_cffi.requests.Session(impersonate="chrome120")`.
-
 - [ ] **Step 2: Install updated requirements**
 
   ```bash
   pip install -r requirements.txt
   ```
-  Expected: httpx, python-dotenv, Pillow, pytest installed; browser-use and langchain removed.
 
 - [ ] **Step 3: Update .env.example**
 
@@ -704,8 +940,14 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
      - Success: `{"status": "success", "links": ["url1", "url2", "url3", "url4"]}`
      - Error: `{"status": "error", "message": "..."}`
 
-     **This takes approximately 8-10 minutes** (Higgsfield generation time — the API wait, not automation overhead).
-     The script handles: login, image upload, generation trigger, polling, and share link extraction automatically.
+     **This takes approximately 8–10 minutes** (Higgsfield server generation time — not automation overhead).
+     The script handles login, image upload, generation trigger, polling, and share link extraction automatically.
+
+     On first run (or after session expiry), the script will prompt:
+     ```
+     Enter the verification code sent to your email:
+     ```
+     Enter the 6-digit code from the account email. Subsequent runs reuse the cached session.
   ```
 
 - [ ] **Step 5: Update SKILL.md Environment Setup section**
@@ -715,33 +957,36 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   ```markdown
   ## Environment Setup
 
-  - **Python venv** at `.venv/` in the repo root with dependencies installed:
+  - **Python venv** at `.venv/` in the repo root:
     ```bash
     python3 -m venv .venv
     .venv/bin/pip install -r requirements.txt
     ```
 
-  - **HIGGSFIELD_EMAIL** and **HIGGSFIELD_PASSWORD** set in `.env` at repo root
+  - **`HIGGSFIELD_EMAIL`** and **`HIGGSFIELD_PASSWORD`** set in `.env` at repo root
 
   - No Chrome, browser, or LLM required
+
+  - Session cached at `~/.higgsfield_session` — delete this file to force re-login
   ```
 
 - [ ] **Step 6: Update SKILL.md Pitfalls section**
 
-  Replace the "Session expired" pitfall with:
+  Replace the "Session expired" and "Chrome not starting" pitfalls with:
   ```markdown
-  - **Auth failure**: If the script returns `"Login failed (401)"`, verify `HIGGSFIELD_EMAIL` and
-    `HIGGSFIELD_PASSWORD` in `.env` are correct and the account is active.
+  - **Auth failure / OTP prompt on every run**: If the script keeps asking for a verification code,
+    the cached session at `~/.higgsfield_session` is expiring. This is normal; enter the code from
+    email. If credentials are wrong, verify `HIGGSFIELD_EMAIL` and `HIGGSFIELD_PASSWORD` in `.env`.
+  - **403 from fnf.higgsfield.ai**: DataDome may be blocking the httpx client. Add `curl_cffi` to
+    requirements and switch to `curl_cffi.requests.Session(impersonate="firefox120")`.
   ```
-
-  Remove the "Chrome not starting" pitfall entirely.
 
 - [ ] **Step 7: Run full test suite before deleting old files**
 
   ```bash
   pytest tests/ -v
   ```
-  Expected: `test_higgsfield_api.py` and `test_get_aspect_ratio.py` all pass.
+  Expected: all tests in `test_higgsfield_api.py` and `test_get_aspect_ratio.py` pass.
 
 - [ ] **Step 8: Delete old script and tests**
 
@@ -754,7 +999,6 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   ```bash
   pytest tests/ -v
   ```
-  Expected: only `test_higgsfield_api.py` and `test_get_aspect_ratio.py` present, all passing.
 
 - [ ] **Step 10: Final commit**
 
@@ -762,11 +1006,9 @@ After receiving the Burp capture, Copilot produces an endpoint map containing:
   git add -A
   git commit -m "feat: replace browser-use with direct Higgsfield HTTP API client
 
-  - Add scripts/higgsfield_api.py: login + upload + generate + poll + share links
-  - Remove scripts/generate_fufu.py and browser-use dependency
+  - Add scripts/higgsfield_api.py: Clerk login + OTP + session cache + S3 upload + generate + poll + share links
+  - Remove scripts/generate_fufu.py and browser-use/LLM dependency
   - Remove GOOGLE_API_KEY; add HIGGSFIELD_EMAIL / HIGGSFIELD_PASSWORD
-  - Update SKILL.md: no Chrome needed, automation overhead ~0s vs 10-15min
-  - Update requirements.txt: drop browser-use, langchain-google-genai
-
-  Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+  - Update SKILL.md: no Chrome needed, session cached at ~/.higgsfield_session
+  - Update requirements.txt: drop browser-use, langchain-google-genai"
   ```
