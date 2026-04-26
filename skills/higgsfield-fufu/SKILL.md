@@ -48,8 +48,10 @@ If the user sends a text message with no image, reply:
 
    a. Run the generation script:
    ```bash
-   HIGGSFIELD_AUTO_OTP=1 python3 ~/HiggsfieldAgent/scripts/higgsfield_api.py "<photo_path>"
+   HIGGSFIELD_AUTO_OTP=1 GAPI="$GAPI" python3 /home/mallika/HiggsfieldAgent/scripts/higgsfield_api.py "<photo_path>"
    ```
+   Passing `GAPI="$GAPI"` explicitly forwards the Hermes shell variable into the
+   Python subprocess so `_fetch_otp_from_gmail()` can find the CLI.
 
    b. Parse the JSON result from stdout:
    - `"status": "error"` → reply with the error message, continue to next photo.

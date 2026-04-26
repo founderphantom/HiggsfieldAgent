@@ -141,23 +141,24 @@ def _fetch_otp_from_gmail(poll_interval: int = 10, max_attempts: int = 12) -> st
     Polls every poll_interval seconds for up to max_attempts tries (~2 minutes).
     Set HIGGSFIELD_AUTO_OTP=1 to activate this path instead of stdin input.
     """
-    gapi = os.environ.get("GAPI", "gapi")
+    # $GAPI may be a multi-word string like "python3 /path/to/gapi.py" — split it
+    gapi = os.environ.get("GAPI", "gapi").split()
     _log(f"Auto-OTP: polling Gmail every {poll_interval}s (up to {max_attempts} attempts)...")
     for attempt in range(1, max_attempts + 1):
         time.sleep(poll_interval)
         _log(f"  Checking Gmail (attempt {attempt}/{max_attempts})...")
         try:
             search_out = subprocess.check_output(
-                [gapi, "gmail", "search",
-                 "from:higgsfield newer_than:5m subject:verification",
-                 "--max", "1"],
+                gapi + ["gmail", "search",
+                        "from:higgsfield newer_than:5m subject:verification",
+                        "--max", "1"],
                 text=True,
             )
             messages = json.loads(search_out)
             if not messages:
                 continue
             msg_out = subprocess.check_output(
-                [gapi, "gmail", "get", messages[0]["id"]],
+                gapi + ["gmail", "get", messages[0]["id"]],
                 text=True,
             )
             body = json.loads(msg_out).get("body", "")
