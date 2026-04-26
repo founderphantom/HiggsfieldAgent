@@ -1,7 +1,7 @@
 ---
 name: higgsfield-fufu
 description: When the user sends one or more photos on Telegram, generate 4 Higgsfield FUFU Soul v2 variations for each image and send the results back.
-version: 3.0.0
+version: 3.1.0
 platforms: [linux, macos, windows]
 required_environment_variables:
   - name: HIGGSFIELD_EMAIL
@@ -55,12 +55,24 @@ If the user sends a text message with no image, reply:
 
    b. Parse the JSON result from stdout:
    - `"status": "error"` → reply with the error message, continue to next photo.
-   - `"status": "success"` → extract `local_paths` (4 PNG files) and `links` (4 share URLs).
+   - `"status": "success"` → extract `local_paths` (list of 4 PNG file paths on disk) and `links` (4 share URLs).
 
-   c. Send each of the 4 files in `local_paths` to the user as Telegram **photos**
-   (not as documents). Caption the first image:
+   c. **Send each file in `local_paths` as a Telegram photo using the `MEDIA:/` prefix.**
+   Output each path on its own line using the `MEDIA:` directive — the Hermes gateway reads
+   these and delivers them as photo attachments. Do NOT send share links as text in place
+   of the images.
+
+   Example output for the 4 images:
    ```
-   Generated 4 variations ✅
+   MEDIA:/home/mallika/photos/photo_out_1.png
+   MEDIA:/home/mallika/photos/photo_out_2.png
+   MEDIA:/home/mallika/photos/photo_out_3.png
+   MEDIA:/home/mallika/photos/photo_out_4.png
+   ```
+
+   After all 4 `MEDIA:` lines, send one follow-up text message:
+   ```
+   Share links:
    1. <links[0]>
    2. <links[1]>
    3. <links[2]>
