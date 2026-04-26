@@ -32,6 +32,10 @@ If the user sends a text message with no image, reply:
 
 ## Procedure
 
+> **Do not use vision tools or analyze the image contents.** You only need the local
+> file path of the photo. The script handles all image processing internally (dimensions,
+> aspect ratio detection, upload). Calling vision tools will fail and is unnecessary.
+
 1. **Inform the user upfront** before running anything:
    - Single photo: "Got your image! Generating 4 variations — this takes about 8 minutes ⏳"
    - Multiple photos: "Got {N} images! Processing one at a time — about 8 minutes each ⏳"

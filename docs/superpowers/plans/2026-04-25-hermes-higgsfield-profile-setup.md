@@ -168,17 +168,16 @@ hermes -p higgsfield chat -q '$GAPI gmail search "is:unread" --max 3'
 
 ## Task 5: Configure the profile
 
-- [ ] **Step 1: Set `terminal.cwd` and enable Telegram reactions**
+- [ ] **Step 1: Merge the config snippet into the profile**
 
-Edit `~/.hermes/profiles/higgsfield/config.yaml`:
-
-```yaml
-terminal:
-  cwd: ~/HiggsfieldAgent
-
-telegram:
-  reactions: true          # shows 👀 while processing, ✅ on success, ❌ on error
+```bash
+cat ~/HiggsfieldAgent/config/hermes-config-snippet.yaml >> ~/.hermes/profiles/higgsfield/config.yaml
 ```
+
+> **Note:** Use absolute paths — inside a Hermes profile, `~` resolves to the profile's
+> own home (`~/.hermes/profiles/higgsfield/home`), not your real Linux home. The snippet
+> uses `/home/mallika/HiggsfieldAgent` as a placeholder — replace `mallika` with your
+> actual WSL username if different.
 
 ---
 

@@ -4,10 +4,10 @@
 
 skills:
   external_dirs:
-    - ~/HiggsfieldAgent/skills   # loads skills/higgsfield-fufu/SKILL.md
+    - /home/mallika/HiggsfieldAgent/skills   # replace 'mallika' with your WSL username
 
 terminal:
-  cwd: ~/HiggsfieldAgent
+  cwd: /home/mallika/HiggsfieldAgent         # replace 'mallika' with your WSL username
 
 telegram:
   reactions: true                # 👀 processing  ✅ done  ❌ error
