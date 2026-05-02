@@ -39,7 +39,7 @@ CLERK_PARAMS = "__clerk_api_version=2025-11-10&_clerk_js_version=5.125.10"
 # ---------------------------------------------------------------------------
 # Generation constants
 # ---------------------------------------------------------------------------
-FUFU_CHARACTER_ID = "9122abde-1e28-46b5-b3c5-712e003a80d7"
+FUFU_CHARACTER_ID = "f457e2ec-a3d9-4699-97dd-0cbc4d9fe1a4"
 GENERAL_STYLE_ID = "3db34ab5-3439-4317-9e03-08dc30852e69"
 SOUL_V2_QUALITY = "1080p"   # captured value; use "2K" if higher quality needed
 SOUL_V2_BATCH = 4
